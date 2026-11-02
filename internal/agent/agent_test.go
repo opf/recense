@@ -69,7 +69,7 @@ func events(t *testing.T, b *bytes.Buffer) []Event {
 }
 
 const inventoryFixture = `{"artifacts":[{"id":"pkg1","name":"openssl","version":"1.0","type":"deb","purl":"pkg:deb/ubuntu/openssl@1.0","locations":[{"path":"/var/lib/dpkg/status"}]},{"id":"pkg2","name":"safe-package","version":"2.0","type":"deb"}]}`
-const findingsFixture = `{"matches":[{"artifact":{"id":"pkg1","name":"openssl","version":"1.0","type":"deb"},"vulnerability":{"id":"TEST-001","namespace":"ubuntu:test","severity":"High","fix":{"state":"fixed","versions":["1.1"]}}}],"descriptor":{"version":"test","configuration":{"password":"secret-never-emit"},"db":{"built":"2026-01-01T00:00:00Z"}}}`
+const findingsFixture = `{"matches":[{"artifact":{"id":"pkg1","name":"openssl","version":"1.0","type":"deb"},"vulnerability":{"id":"TEST-001","namespace":"ubuntu:test","severity":"High","fix":{"state":"fixed","versions":["1.1"]}}}],"descriptor":{"version":"test","configuration":{"password":"secret-never-emit"},"db":{"status":{"built":"2026-01-01T00:00:00Z","schemaVersion":"v6.1.10","valid":true}}}}`
 
 func TestScanInventoryFindingsAndCompletion(t *testing.T) {
 	var b bytes.Buffer
@@ -86,6 +86,9 @@ func TestScanInventoryFindingsAndCompletion(t *testing.T) {
 		t.Fatal("inventory omitted a package without vulnerabilities")
 	}
 	final := rows[len(rows)-1]
+	if final["vulnerability_db_built_at"] != "2026-01-01T00:00:00Z" {
+		t.Fatal("missing database provenance")
+	}
 	if final["status"] != "success" || final["high_count"] != float64(1) || final["finding_count"] != float64(1) {
 		t.Fatalf("bad completion: %#v", final)
 	}

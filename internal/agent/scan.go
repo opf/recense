@@ -142,13 +142,17 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	fields := Event{"status": "success", "finding_count": len(report.Matches), "package_count": len(packages.Artifacts), "scanner_name": "grype", "scanner_version": report.Descriptor.Version, "duration_seconds": time.Since(started).Seconds()}
 	// Preserve database provenance only. Never emit descriptor.configuration:
 	// it can contain registry credentials and local environment information.
-	var db map[string]any
-	if json.Unmarshal(report.Descriptor.DB, &db) == nil {
-		for _, key := range []string{"built", "schemaVersion", "checksum"} {
-			if v, ok := db[key]; ok {
-				fields["vulnerability_db_"+key] = v
-			}
-		}
+	var db struct {
+		Status struct {
+			Built         string `json:"built"`
+			SchemaVersion string `json:"schemaVersion"`
+			Valid         bool   `json:"valid"`
+		} `json:"status"`
+	}
+	if json.Unmarshal(report.Descriptor.DB, &db) == nil && db.Status.Built != "" {
+		fields["vulnerability_db_built_at"] = db.Status.Built
+		fields["vulnerability_db_schema_version"] = db.Status.SchemaVersion
+		fields["vulnerability_db_valid"] = db.Status.Valid
 	}
 	for severity, count := range counts {
 		fields[severity+"_count"] = count
