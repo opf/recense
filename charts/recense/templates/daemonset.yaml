@@ -32,6 +32,7 @@ spec:
             - --runtime={{ .Values.runtime }}
             - --socket=/runtime/runtime.sock
             - --interval={{ .Values.interval }}
+            - --inventory-interval={{ .Values.inventoryInterval }}
             - --jitter={{ .Values.jitter }}
             - --scan-timeout={{ .Values.scanTimeout }}
           env:

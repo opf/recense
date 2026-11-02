@@ -17,11 +17,14 @@ type Config struct {
 	Syft, Grype, Output, Version                                  string
 	Interval, Timeout, Jitter                                     time.Duration
 	Once                                                          bool
+	InventoryInterval                                             time.Duration
+	StateFile                                                     string
+	snapshots                                                     *snapshotSchedule
 }
 
 func Run(ctx context.Context, c Config) error {
-	if c.Interval <= 0 || c.Timeout <= 0 || c.Jitter < 0 {
-		return errors.New("interval and scan-timeout must be positive; jitter must be nonnegative")
+	if c.Interval <= 0 || c.Timeout <= 0 || c.InventoryInterval <= 0 || c.Jitter < 0 {
+		return errors.New("interval, inventory-interval and scan-timeout must be positive; jitter must be nonnegative")
 	}
 	switch c.Runtime {
 	case "auto", "none", "docker", "containerd":
@@ -42,6 +45,12 @@ func Run(ctx context.Context, c Config) error {
 		"host_id": c.HostID, "host_name": host["host_name"], "agent_version": c.Version,
 		"environment": c.Environment, "k8s_cluster_name": c.Cluster,
 	}}
+	c.snapshots, err = loadSnapshotSchedule(c.StateFile, c.InventoryInterval)
+	if err != nil {
+		if emitErr := e.emit("agent.error", Event{"error": "inventory schedule could not be loaded; full snapshots will be sent", "stage": "inventory_schedule"}); emitErr != nil {
+			return emitErr
+		}
+	}
 	// Heartbeats continue during long scans, but do not imply that scans succeeded.
 	heartbeatCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

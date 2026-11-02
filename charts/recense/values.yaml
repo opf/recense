@@ -6,6 +6,7 @@ imagePullSecrets: []
 clusterName: ""
 environment: ""
 interval: 24h
+inventoryInterval: 168h
 jitter: 15m
 scanTimeout: 45m
 runtime: containerd

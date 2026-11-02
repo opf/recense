@@ -23,7 +23,7 @@ sudo tail -f /var/log/recense/events.jsonl
 
 Set `RECENSE_ENVIRONMENT`, `RECENSE_CLUSTER`, and optional `RECENSE_HOST_ID` / `RECENSE_HOST_NAME` in `/etc/recense/environment`, then restart the service. Host IDs default to `/etc/machine-id`; cloned images must receive unique machine IDs. Set labels before collecting production data.
 
-Recense sends a heartbeat every minute. Scans start after a random delay of up to 15 minutes, then repeat 24 hours after completion with another random delay. Set `--interval` and `--jitter` to adjust scheduling; `--once` skips the delay. Host and container scans run sequentially with one scanner worker. Each Syft/Grype invocation has a 45-minute timeout and a 128 MiB output limit. Scanner failure does not produce a clean result.
+Recense sends a heartbeat every minute. Scans start after a random delay of up to 15 minutes, then repeat 24 hours after completion with another random delay. Set `--interval` and `--jitter` to adjust scheduling; `--once` skips the delay. Full package snapshots are emitted on the first successful inventory of each target, then at most once every seven days (`--inventory-interval=168h`). Every daily cycle still builds a fresh local inventory, checks all detected packages for CVEs, and emits individual findings and a severity summary. This reduces log traffic, not scanner work. Host and container scans run sequentially with one scanner worker. Each Syft/Grype invocation has a 45-minute timeout and a 128 MiB output limit. Scanner failure does not produce a clean result.
 
 For a single run or custom scheduling:
 
@@ -125,3 +125,21 @@ Go dependencies are pinned in `go.mod` / `go.sum`. Scanner versions are pinned i
 Before a release, run CI and verify both VM fixture collection and container runtime discovery. Unit tests use fake scanners and local Docker/CRI API servers; they do not inspect the developer's host or containers. CI also runs real Syft/Grype scans against a disposable Docker host and writable container filesystems, and the Helm DaemonSet in a disposable kind cluster.
 
 Apache-2.0. Bundled scanners and their licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+
+### Weekly inventory and daily CVE results
+
+Package snapshots and CVE results have independent freshness. Use the latest successful `software.inventory_completed` scan for installed-package history. Use the latest successful `vulnerability.scan_completed` scan for current CVE results. A daily CVE scan may have no emitted package snapshot; its `inventory_snapshot_sent` field says whether one was emitted. An absent inventory marker on that scan does not mean the host has no packages.
+
+A small schedule file at `/var/lib/recense/inventory-snapshots.json` records when each target's snapshot was emitted. Writes use atomic replacement. Missing or corrupt state triggers fresh snapshots; a write failure reports `agent.error` without stopping CVE checks. State loss may repeat snapshots. This file is not a delivery receipt: collector outages can still lose logs. One Recense process should own each state file. Use a fresh state file when changing the log destination.
+
+The Helm cache volume preserves this schedule across container restarts, but pod replacement loses it. New container IDs receive an initial snapshot. Expired entries are removed when snapshots are recorded. No SBOMs or vulnerability results are cached for reuse between daily scans.
+
+### SigNoz views
+
+Filter logs by `service.name = recense`, then by event type:
+
+- Package inventory: `software.inventory`, filtered by package name, host, or container and the latest successful inventory `scan_id`.
+- CVE details: `vulnerability.finding`, filtered by `vulnerability_severity`, `package_name`, `vulnerability_id`, and `fix_available`.
+- Daily totals: `vulnerability.scan_completed` with `status = success`; chart `critical_count`, `high_count`, `medium_count`, `low_count`, and `fix_available_count` per target.
+
+Keep all detected packages in scope. Use dashboard filters to prioritize High/Critical findings and available fixes. Counts represent package/advisory matches, not unique CVEs. Choose the latest successful scan per target before aggregating; summing several days repeats findings. Show failed scans and scan age separately.
