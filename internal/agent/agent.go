@@ -147,7 +147,7 @@ func cycle(ctx context.Context, c Config, e *emitter) error {
 				continue
 			}
 			seen[container.ImageID] = true
-			t := target{Kind: "container_image", ID: container.ImageID, Source: runtimeName + ":" + container.ImageID}
+			t := target{Kind: "container_image", ID: container.ImageID, Source: runtimeName + ":" + container.ImageSource}
 			if err := scan(ctx, c, e, t); err != nil {
 				failures = append(failures, err)
 			}

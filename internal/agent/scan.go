@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -26,6 +27,11 @@ type packageRecord struct {
 }
 type sbom struct {
 	Artifacts []packageRecord `json:"artifacts"`
+	Source    struct {
+		Metadata struct {
+			ImageID string `json:"imageID"`
+		} `json:"metadata"`
+	} `json:"source"`
 }
 type grypeReport struct {
 	Matches []struct {
@@ -81,6 +87,9 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	}
 	env := []string{"CONTAINERD_ADDRESS=" + c.Socket, "CONTAINERD_NAMESPACE=" + c.Namespace, "DOCKER_HOST=unix://" + c.Socket}
 	args := []string{"scan", t.Source, "-o", "syft-json", "-c", config, "--quiet"}
+	if t.Kind == "container_image" {
+		args = append(args, "--platform", "linux/"+runtime.GOARCH)
+	}
 	if t.Kind == "host" {
 		for _, path := range []string{"proc", "sys", "dev", "run", "tmp", "var/lib/docker", "var/lib/containerd", "var/lib/kubelet", "var/lib/recense"} {
 			args = append(args, "--exclude", "./"+path+"/**")
@@ -98,6 +107,9 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	}
 	if packages.Artifacts == nil {
 		return fmt.Errorf("Syft report is missing artifacts")
+	}
+	if t.Kind == "container_image" && packages.Source.Metadata.ImageID != t.ID {
+		return fmt.Errorf("scanned image ID does not match the running container; image reference may have changed")
 	}
 	for _, p := range packages.Artifacts {
 		fields := packageFields(p)

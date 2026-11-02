@@ -127,7 +127,7 @@ func TestScanFailuresNeverReportClean(t *testing.T) {
 func TestEmptySuccessfulScan(t *testing.T) {
 	var b bytes.Buffer
 	e := &emitter{writer: &b}
-	c := Config{Syft: fakeScanner(t, "syft", `{"artifacts":[]}`, 0), Grype: fakeScanner(t, "grype", `{"matches":[]}`, 0), Timeout: time.Second}
+	c := Config{Syft: fakeScanner(t, "syft", `{"artifacts":[],"source":{"metadata":{"imageID":"sha256:abc"}}}`, 0), Grype: fakeScanner(t, "grype", `{"matches":[]}`, 0), Timeout: time.Second}
 	if err := scan(context.Background(), c, e, target{Kind: "container_image", ID: "sha256:abc"}); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func (f *criFixture) ListContainers(_ context.Context, r *cri.ListContainersRequ
 	return &cri.ListContainersResponse{Containers: []*cri.Container{{Id: "c1", ImageRef: "sha256:config", Image: &cri.ImageSpec{Image: "app:latest"}, Metadata: &cri.ContainerMetadata{Name: "api"}, Labels: map[string]string{"io.kubernetes.pod.name": "api-123", "io.kubernetes.pod.namespace": "prod"}}}}, nil
 }
 func (f *criFixture) ImageStatus(_ context.Context, _ *cri.ImageStatusRequest) (*cri.ImageStatusResponse, error) {
-	return &cri.ImageStatusResponse{Image: &cri.Image{RepoDigests: []string{"registry/app@sha256:manifest"}}}, nil
+	return &cri.ImageStatusResponse{Image: &cri.Image{Id: "sha256:config", RepoDigests: []string{"registry/app@sha256:manifest"}}}, nil
 }
 func TestCRIDiscoveryResolvesDigest(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "c.sock")
@@ -200,7 +200,7 @@ func TestCRIDiscoveryResolvesDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ImageID != "registry/app@sha256:manifest" || rows[0].PodNamespace != "prod" {
+	if len(rows) != 1 || rows[0].ImageID != "sha256:config" || rows[0].ImageSource != "registry/app@sha256:manifest" || rows[0].PodNamespace != "prod" {
 		t.Fatalf("bad discovery: %#v", rows)
 	}
 }
@@ -248,5 +248,18 @@ func TestHostAbsoluteSymlinksDoNotReadAgentFilesystem(t *testing.T) {
 	}
 	if event["reboot_required"] != true || event["os_version"] != "24.04" {
 		t.Fatalf("read agent filesystem: %#v", event)
+	}
+}
+
+func TestImageIdentityMismatchFailsBeforePublishingInventory(t *testing.T) {
+	var b bytes.Buffer
+	e := &emitter{writer: &b}
+	c := Config{Syft: fakeScanner(t, "syft", `{"artifacts":[{"name":"wrong-package"}],"source":{"metadata":{"imageID":"sha256:wrong"}}}`, 0), Timeout: time.Second}
+	if err := scan(context.Background(), c, e, target{Kind: "container_image", ID: "sha256:expected"}); err == nil {
+		t.Fatal("accepted a moved tag")
+	}
+	rows := events(t, &b)
+	if len(rows) != 1 || rows[0]["status"] != "failed" {
+		t.Fatalf("published incorrect inventory: %#v", rows)
 	}
 }

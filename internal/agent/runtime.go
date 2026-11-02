@@ -16,7 +16,7 @@ import (
 	cri "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
-type container struct{ ID, Name, ImageID, ImageName, PodName, PodNamespace, PodContainer string }
+type container struct{ ID, Name, ImageID, ImageName, ImageSource, PodName, PodNamespace, PodContainer string }
 
 func discover(ctx context.Context, c Config) ([]container, string, string, error) {
 	if c.Runtime == "none" {
@@ -90,7 +90,7 @@ func dockerContainers(ctx context.Context, socket string) ([]container, error) {
 		if r.ImageID == "" {
 			return nil, fmt.Errorf("Docker container %s has no immutable image ID", r.ID)
 		}
-		result = append(result, container{ID: r.ID, Name: name, ImageID: r.ImageID, ImageName: r.Image})
+		result = append(result, container{ID: r.ID, Name: name, ImageID: r.ImageID, ImageSource: r.ImageID, ImageName: r.Image})
 	}
 	return result, nil
 }
@@ -124,10 +124,19 @@ func criContainers(ctx context.Context, socket string) ([]container, error) {
 		if err != nil {
 			return nil, fmt.Errorf("CRI image status: %w", err)
 		}
-		if status.Image == nil || len(status.Image.RepoDigests) == 0 {
-			return nil, fmt.Errorf("CRI image %s has no repository digest", r.ImageRef)
+		if status.Image == nil || status.Image.Id == "" {
+			return nil, fmt.Errorf("CRI image %s has no immutable image ID", r.ImageRef)
 		}
-		result = append(result, container{ID: r.Id, Name: name, ImageID: status.Image.RepoDigests[0], ImageName: image, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
+		source := ""
+		if len(status.Image.RepoDigests) > 0 {
+			source = status.Image.RepoDigests[0]
+		} else if len(status.Image.RepoTags) > 0 {
+			source = status.Image.RepoTags[0]
+		}
+		if source == "" {
+			return nil, fmt.Errorf("CRI image %s has no local image reference", r.ImageRef)
+		}
+		result = append(result, container{ID: r.Id, Name: name, ImageID: status.Image.Id, ImageSource: source, ImageName: image, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
 	}
 	return result, nil
 }
