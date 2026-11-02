@@ -27,7 +27,7 @@ func TestWeeklySnapshotsKeepDailyFindings(t *testing.T) {
 		counts := map[string]int{}
 		rows := events(t, &b)
 		for _, row := range rows {
-			counts[row["event_type"].(string)]++
+			counts[row["recense.event.type"].(string)]++
 		}
 		if wantInventory && (counts["software.inventory"] != 2 || counts["software.inventory_completed"] != 1) {
 			t.Fatalf("missing full snapshot: %v", counts)
@@ -40,12 +40,12 @@ func TestWeeklySnapshotsKeepDailyFindings(t *testing.T) {
 		}
 		if !wantInventory {
 			for _, row := range rows {
-				if row["event_type"] == "vulnerability.finding" && row["vulnerability_id"] != "TEST-NEW" {
+				if row["recense.event.type"] == "vulnerability.finding" && row["recense.vulnerability.id"] != "TEST-NEW" {
 					t.Fatal("reused stale CVE results")
 				}
 			}
 		}
-		if rows[len(rows)-1]["inventory_snapshot_sent"] != wantInventory {
+		if rows[len(rows)-1]["recense.inventory.snapshot_sent"] != wantInventory {
 			t.Fatal("incorrect snapshot summary")
 		}
 	}
@@ -142,11 +142,11 @@ func TestScheduleWriteFailureDoesNotSkipCVECheck(t *testing.T) {
 	rows := events(t, &b)
 	warnings := 0
 	for _, r := range rows {
-		if r["event_type"] == "agent.error" {
+		if r["recense.event.type"] == "agent.error" {
 			warnings++
 		}
 	}
-	if warnings != 1 || rows[len(rows)-1]["status"] != "success" {
+	if warnings != 1 || rows[len(rows)-1]["recense.status"] != "success" {
 		t.Fatal("state error hid CVE results")
 	}
 }
@@ -164,7 +164,7 @@ func TestFixAvailabilityFields(t *testing.T) {
 		}
 		rows := events(t, &b)
 		for _, r := range rows {
-			if r["event_type"] == "vulnerability.finding" && r["fix_available"] != fixed {
+			if r["recense.event.type"] == "vulnerability.finding" && r["recense.vulnerability.fix.available"] != fixed {
 				t.Fatal("wrong fix availability")
 			}
 		}
@@ -172,7 +172,7 @@ func TestFixAvailabilityFields(t *testing.T) {
 		if fixed {
 			want = 1
 		}
-		if rows[len(rows)-1]["fix_available_count"] != want {
+		if rows[len(rows)-1]["recense.vulnerability.fix_available_count"] != want {
 			t.Fatal("wrong fix count")
 		}
 	}

@@ -22,11 +22,11 @@ docker exec "$engine" docker run --rm --cap-drop=ALL --cap-add=DAC_READ_SEARCH -
 python3 - "$events" <<'PY'
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1])]
-scans = [r for r in rows if r['event_type'] == 'vulnerability.scan_completed']
-assert any(r['target_type'] == 'host' and r['status'] == 'success' for r in scans)
-app = next(r for r in rows if r['event_type'] == 'container.inventory' and r['container_name'] == 'recense-smoke-app')
-assert any(r['target_type'] == 'container' and r['target_id'] == app['container_id'] and r['status'] == 'success' for r in scans)
-assert any(r['event_type'] == 'software.inventory' and r['target_id'] == app['container_id'] and r['package_name'] == 'recense-writable-marker' for r in rows)
-assert rows[-1]['event_type'] == 'agent.collection_completed' and rows[-1]['status'] == 'success'
+scans = [r for r in rows if r['recense.event.type'] == 'vulnerability.scan_completed']
+assert any(r['recense.target.type'] == 'host' and r['recense.status'] == 'success' for r in scans)
+app = next(r for r in rows if r['recense.event.type'] == 'container.inventory' and r['recense.target.container.name'] == 'recense-smoke-app')
+assert any(r['recense.target.type'] == 'container' and r['recense.target.id'] == app['recense.target.container.id'] and r['recense.status'] == 'success' for r in scans)
+assert any(r['recense.event.type'] == 'software.inventory' and r['recense.target.id'] == app['recense.target.container.id'] and r['recense.package.name'] == 'recense-writable-marker' for r in rows)
+assert rows[-1]['recense.event.type'] == 'agent.collection_completed' and rows[-1]['recense.status'] == 'success'
 print('Verified host inventory, Docker discovery, writable-layer inventory, and completed snapshots')
 PY

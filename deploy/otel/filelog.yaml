@@ -10,15 +10,24 @@ receivers:
           parse_from: attributes.timestamp
           layout_type: gotime
           layout: '2006-01-02T15:04:05.999999999Z07:00'
-      - type: move
+      - type: copy
         from: attributes["service.name"]
         to: resource["service.name"]
-      - type: move
-        from: attributes.host_id
+      - type: copy
+        from: attributes["host.id"]
         to: resource["host.id"]
-      - type: move
-        from: attributes.host_name
+      - type: copy
+        from: attributes["host.name"]
         to: resource["host.name"]
+      - type: copy
+        from: attributes["service.version"]
+        to: resource["service.version"]
+      - type: copy
+        from: attributes["deployment.environment.name"]
+        to: resource["deployment.environment.name"]
+      - type: copy
+        from: attributes["k8s.cluster.name"]
+        to: resource["k8s.cluster.name"]
 # service:
 #   pipelines:
 #     logs:

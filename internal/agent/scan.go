@@ -17,6 +17,7 @@ type target struct {
 	Kind, ID, Source string
 	Excludes         []string
 	Validate         func() error
+	Fields           Event
 }
 type packageRecord struct {
 	ID        string `json:"id"`
@@ -55,7 +56,10 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		return err
 	}
 	started := time.Now()
-	base := Event{"scan_id": scanID, "target_type": t.Kind, "target_id": t.ID}
+	base := Event{"recense.scan.id": scanID, "recense.target.type": t.Kind, "recense.target.id": t.ID}
+	for k, v := range t.Fields {
+		base[k] = v
+	}
 	emit := func(kind string, fields Event) error {
 		merged := Event{}
 		for k, v := range base {
@@ -68,7 +72,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	}
 	defer func() {
 		if resultErr != nil {
-			if err := emit("vulnerability.scan_completed", Event{"status": "failed", "error": resultErr.Error(), "duration_seconds": time.Since(started).Seconds()}); err != nil {
+			if err := emit("vulnerability.scan_completed", Event{"recense.status": "failed", "recense.error": resultErr.Error(), "recense.scan.duration_seconds": time.Since(started).Seconds()}); err != nil {
 				resultErr = fmt.Errorf("%w; emit failure: %v", resultErr, err)
 			}
 		}
@@ -124,13 +128,13 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 				return err
 			}
 		}
-		if err := emit("software.inventory_completed", Event{"status": "success", "package_count": len(packages.Artifacts)}); err != nil {
+		if err := emit("software.inventory_completed", Event{"recense.status": "success", "recense.package.count": len(packages.Artifacts)}); err != nil {
 			return err
 		}
 		snapshotSent = true
 		if c.snapshots != nil {
 			if err := c.snapshots.record(key, time.Now()); err != nil {
-				if emitErr := emit("agent.error", Event{"stage": "inventory_schedule", "error": "inventory schedule could not be saved; a restart may repeat snapshots"}); emitErr != nil {
+				if emitErr := emit("agent.error", Event{"recense.stage": "inventory_schedule", "recense.error": "inventory schedule could not be saved; a restart may repeat snapshots"}); emitErr != nil {
 					return emitErr
 				}
 			}
@@ -161,23 +165,23 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	fixAvailableCount := 0
 	for _, m := range report.Matches {
 		fields := packageFields(m.Artifact)
-		fields["vulnerability_id"] = m.Vulnerability.ID
-		fields["vulnerability_namespace"] = m.Vulnerability.Namespace
-		fields["vulnerability_severity"] = m.Vulnerability.Severity
-		fields["fix_state"] = m.Vulnerability.Fix.State
-		fields["fix_versions"] = m.Vulnerability.Fix.Versions
-		fields["fix_available"] = len(m.Vulnerability.Fix.Versions) > 0
+		fields["recense.vulnerability.id"] = m.Vulnerability.ID
+		fields["recense.vulnerability.namespace"] = m.Vulnerability.Namespace
+		fields["recense.vulnerability.severity"] = m.Vulnerability.Severity
+		fields["recense.vulnerability.fix.state"] = m.Vulnerability.Fix.State
+		fields["recense.vulnerability.fix.versions"] = m.Vulnerability.Fix.Versions
+		fields["recense.vulnerability.fix.available"] = len(m.Vulnerability.Fix.Versions) > 0
 		if len(m.Vulnerability.Fix.Versions) > 0 {
 			fixAvailableCount++
 		}
-		fields["scanner_name"] = "grype"
+		fields["recense.scanner.name"] = "grype"
 		if err := emit("vulnerability.finding", fields); err != nil {
 			return err
 		}
 		counts[strings.ToLower(m.Vulnerability.Severity)]++
 	}
-	fields := Event{"status": "success", "finding_count": len(report.Matches), "package_count": packageCount, "inventory_snapshot_sent": snapshotSent, "scanner_name": "grype", "scanner_version": report.Descriptor.Version, "duration_seconds": time.Since(started).Seconds()}
-	fields["fix_available_count"] = fixAvailableCount
+	fields := Event{"recense.status": "success", "recense.vulnerability.count": len(report.Matches), "recense.package.count": packageCount, "recense.inventory.snapshot_sent": snapshotSent, "recense.scanner.name": "grype", "recense.scanner.version": report.Descriptor.Version, "recense.scan.duration_seconds": time.Since(started).Seconds()}
+	fields["recense.vulnerability.fix_available_count"] = fixAvailableCount
 	// Preserve database provenance only. Never emit descriptor.configuration:
 	// it can contain registry credentials and local environment information.
 	var db struct {
@@ -188,12 +192,12 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		} `json:"status"`
 	}
 	if json.Unmarshal(report.Descriptor.DB, &db) == nil && db.Status.Built != "" {
-		fields["vulnerability_db_built_at"] = db.Status.Built
-		fields["vulnerability_db_schema_version"] = db.Status.SchemaVersion
-		fields["vulnerability_db_valid"] = db.Status.Valid
+		fields["recense.vulnerability.db.built_at"] = db.Status.Built
+		fields["recense.vulnerability.db.schema_version"] = db.Status.SchemaVersion
+		fields["recense.vulnerability.db.valid"] = db.Status.Valid
 	}
 	for severity, count := range counts {
-		fields[severity+"_count"] = count
+		fields["recense.vulnerability."+severity+"_count"] = count
 	}
 	return emit("vulnerability.scan_completed", fields)
 }
@@ -203,7 +207,7 @@ func packageFields(p packageRecord) Event {
 	for _, l := range p.Locations {
 		paths = append(paths, l.Path)
 	}
-	return Event{"package_id": p.ID, "package_name": p.Name, "package_version": p.Version, "package_type": p.Type, "package_purl": p.PURL, "package_paths": paths}
+	return Event{"recense.package.id": p.ID, "recense.package.name": p.Name, "recense.package.version": p.Version, "recense.package.type": p.Type, "recense.package.purl": p.PURL, "recense.package.paths": paths}
 }
 
 type limitedBuffer struct {

@@ -29,8 +29,8 @@ func (e *emitter) emit(kind string, fields Event) error {
 		event[k] = v
 	}
 	event["timestamp"] = time.Now().UTC().Format(time.RFC3339Nano)
-	event["event_type"] = kind
-	event["schema_version"] = 2
+	event["recense.event.type"] = kind
+	event["recense.schema.version"] = 3
 	event["service.name"] = "recense"
 	w := e.writer
 	if e.output != "" {

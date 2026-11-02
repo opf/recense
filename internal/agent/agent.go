@@ -40,14 +40,14 @@ func Run(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
-	c.HostID = host["host_id"].(string)
+	c.HostID = host["host.id"].(string)
 	e := &emitter{output: c.Output, writer: os.Stdout, base: Event{
-		"host_id": c.HostID, "host_name": host["host_name"], "agent_version": c.Version,
-		"environment": c.Environment, "k8s_cluster_name": c.Cluster,
+		"host.id": c.HostID, "host.name": host["host.name"], "service.version": c.Version,
+		"deployment.environment.name": c.Environment, "k8s.cluster.name": c.Cluster,
 	}}
 	c.snapshots, err = loadSnapshotSchedule(c.StateFile, c.InventoryInterval)
 	if err != nil {
-		if emitErr := e.emit("agent.error", Event{"error": "inventory schedule could not be loaded; full snapshots will be sent", "stage": "inventory_schedule"}); emitErr != nil {
+		if emitErr := e.emit("agent.error", Event{"recense.error": "inventory schedule could not be loaded; full snapshots will be sent", "recense.stage": "inventory_schedule"}); emitErr != nil {
 			return emitErr
 		}
 	}
@@ -111,7 +111,7 @@ func Run(ctx context.Context, c Config) error {
 		default:
 		}
 		if err != nil {
-			if emitErr := e.emit("agent.error", Event{"error": err.Error()}); emitErr != nil {
+			if emitErr := e.emit("agent.error", Event{"recense.error": err.Error()}); emitErr != nil {
 				return emitErr
 			}
 		}
@@ -131,16 +131,16 @@ func cycle(ctx context.Context, c Config, e *emitter) error {
 	if err != nil {
 		return err
 	}
-	host["collection_id"] = id
+	host["recense.collection.id"] = id
 	if err := e.emit("host.inventory", host); err != nil {
 		return err
 	}
 	updates := checkUpdates(ctx, c)
-	updates["collection_id"] = id
+	updates["recense.collection.id"] = id
 	if err := e.emit("host.updates", updates); err != nil {
 		return err
 	}
-	if updates["status"] == "failed" {
+	if updates["recense.status"] == "failed" {
 		failures = append(failures, errors.New("update check failed"))
 	}
 
@@ -150,26 +150,25 @@ func cycle(ctx context.Context, c Config, e *emitter) error {
 	containers, runtimeName, socket, err := discover(ctx, c)
 	if err != nil {
 		failures = append(failures, err)
-		if emitErr := e.emit("container.discovery_completed", Event{"collection_id": id, "status": "failed", "error": err.Error()}); emitErr != nil {
+		if emitErr := e.emit("container.discovery_completed", Event{"recense.collection.id": id, "recense.status": "failed", "recense.error": err.Error()}); emitErr != nil {
 			return emitErr
 		}
 	} else {
 		for _, container := range containers {
-			event := Event{"collection_id": id, "container_id": container.ID, "container_name": container.Name,
-				"image_id": container.ImageID, "image_name": container.ImageName, "container_runtime": runtimeName,
-				"k8s_namespace_name": container.PodNamespace, "k8s_pod_name": container.PodName, "k8s_container_name": container.PodContainer}
+			event := containerFields(container, runtimeName)
+			event["recense.collection.id"] = id
 			if err := e.emit("container.inventory", event); err != nil {
 				return err
 			}
 		}
-		if err := e.emit("container.discovery_completed", Event{"collection_id": id, "status": "success", "container_runtime": runtimeName, "container_count": len(containers)}); err != nil {
+		if err := e.emit("container.discovery_completed", Event{"recense.collection.id": id, "recense.status": "success", "recense.target.container.runtime": runtimeName, "recense.discovery.container_count": len(containers)}); err != nil {
 			return err
 		}
 		for _, container := range containers {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			t := target{Kind: "container", ID: container.ID}
+			t := target{Kind: "container", ID: container.ID, Fields: containerFields(container, runtimeName)}
 			root, exclusions, validate, rootErr := containerFilesystem(c.Root, container.PID)
 			if rootErr != nil {
 				t.Validate = func() error { return rootErr }
@@ -192,7 +191,7 @@ func cycle(ctx context.Context, c Config, e *emitter) error {
 	if len(failures) > 0 {
 		status = "failed"
 	}
-	if err := e.emit("agent.collection_completed", Event{"collection_id": id, "status": status, "failure_count": len(failures)}); err != nil {
+	if err := e.emit("agent.collection_completed", Event{"recense.collection.id": id, "recense.status": status, "recense.collection.failure_count": len(failures)}); err != nil {
 		return err
 	}
 	return errors.Join(failures...)
@@ -204,4 +203,17 @@ func newID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+func containerFields(c container, runtimeName string) Event {
+	return Event{
+		"recense.target.container.id":       c.ID,
+		"recense.target.container.name":     c.Name,
+		"recense.target.container.runtime":  runtimeName,
+		"recense.target.image.id":           c.ImageID,
+		"recense.target.image.name":         c.ImageName,
+		"recense.target.k8s.namespace.name": c.PodNamespace,
+		"recense.target.k8s.pod.name":       c.PodName,
+		"recense.target.k8s.container.name": c.PodContainer,
+	}
 }

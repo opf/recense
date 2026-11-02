@@ -68,13 +68,13 @@ The vulnerability database is cached locally; an observed database used about 3.
 
 VMs: merge [deploy/otel/filelog.yaml](deploy/otel/filelog.yaml) into the existing Collector configuration and add `filelog/recense` to its logs pipeline. Ensure the collector can read the log directory and files (the installer defaults to root ownership). The example parses JSON, timestamps, and host/service resource attributes. Configure persistent file offsets in your Collector if you need restart-safe delivery.
 
-Kubernetes: use the existing container log receiver to parse the CRI envelope, then parse the Recense JSON body. Promote `service.name`, `host_id`, and `host_name` to resource attributes as in the VM example. Do not add another receiver for the same pod logs. Parsing JSON is required: writing JSON alone does not make its fields searchable.
+Kubernetes: use the existing container log receiver to parse the CRI envelope, then parse the Recense JSON body. Promote `service.name`, `host.id`, and `host.name` to resource attributes as in the VM example. Do not add another receiver for the same pod logs. Parsing JSON is required: writing JSON alone does not make its fields searchable.
 
 Recense never needs a SigNoz token. Your collector retains transport, authentication, retries, and batching.
 
 ## Event model
 
-Every record has an RFC3339 UTC `timestamp`, `schema_version=2`, `service.name=recense`, `host_id`, `host_name`, `agent_version`, `environment`, and `k8s_cluster_name`.
+Every record has an RFC3339 UTC `timestamp`, `recense.schema.version=3`, `service.name=recense`, `host.id`, `host.name`, `service.version`, `deployment.environment.name`, and `k8s.cluster.name`.
 
 | Event | Purpose |
 |---|---|
@@ -90,9 +90,9 @@ Every record has an RFC3339 UTC `timestamp`, `schema_version=2`, `service.name=r
 | `vulnerability.scan_completed` | Successful scan and counts, or failure without counts |
 | `agent.collection_completed` | Result of the whole collection cycle |
 
-Scan events share a random `scan_id`, `target_type` (`host` or `container`), and `target_id`. Container discovery events share a `collection_id`. Software and vulnerability records are snapshots, not change events.
+Scan events share a random `recense.scan.id`, `recense.target.type` (`host` or `container`), and `recense.target.id`. Container discovery events share a `recense.collection.id`. Software and vulnerability records are snapshots, not change events.
 
-For current findings, select the latest **successful** vulnerability scan for each `(host_id, target_type, target_id)`, then select its findings by `scan_id`. Show the age of that scan separately. A newer failure must not erase previous findings or appear healthy. Inventory uses its own successful completion marker. Container presence uses the latest successful discovery snapshot; absent containers are no longer active on that host. Historical findings remain in logs until retention expires.
+For current findings, select the latest **successful** vulnerability scan for each `(host.id, recense.target.type, recense.target.id)`, then select its findings by `recense.scan.id`. Show the age of that scan separately. A newer failure must not erase previous findings or appear healthy. Inventory uses its own successful completion marker. Container presence uses the latest successful discovery snapshot; absent containers are no longer active on that host. Historical findings remain in logs until retention expires.
 
 Do not count every finding in a time window as a current vulnerability: repeated scans repeat findings. Empty successful scans explicitly report zero. A terminated process may leave records without a completion marker; these are incomplete snapshots.
 
@@ -128,7 +128,7 @@ Apache-2.0. Bundled scanners and their licenses are listed in [THIRD_PARTY.md](T
 
 ### Weekly inventory and daily CVE results
 
-Package snapshots and CVE results have independent freshness. Use the latest successful `software.inventory_completed` scan for installed-package history. Use the latest successful `vulnerability.scan_completed` scan for current CVE results. A daily CVE scan may have no emitted package snapshot; its `inventory_snapshot_sent` field says whether one was emitted. An absent inventory marker on that scan does not mean the host has no packages.
+Package snapshots and CVE results have independent freshness. Use the latest successful `software.inventory_completed` scan for installed-package history. Use the latest successful `vulnerability.scan_completed` scan for current CVE results. A daily CVE scan may have no emitted package snapshot; its `recense.inventory.snapshot_sent` field says whether one was emitted. An absent inventory marker on that scan does not mean the host has no packages.
 
 A small schedule file at `/var/lib/recense/inventory-snapshots.json` records when each target's snapshot was emitted. Writes use atomic replacement. Missing or corrupt state triggers fresh snapshots; a write failure reports `agent.error` without stopping CVE checks. State loss may repeat snapshots. This file is not a delivery receipt: collector outages can still lose logs. One Recense process should own each state file. Use a fresh state file when changing the log destination.
 
@@ -138,8 +138,10 @@ The Helm cache volume preserves this schedule across container restarts, but pod
 
 Filter logs by `service.name = recense`, then by event type:
 
-- Package inventory: `software.inventory`, filtered by package name, host, or container and the latest successful inventory `scan_id`.
-- CVE details: `vulnerability.finding`, filtered by `vulnerability_severity`, `package_name`, `vulnerability_id`, and `fix_available`.
-- Daily totals: `vulnerability.scan_completed` with `status = success`; chart `critical_count`, `high_count`, `medium_count`, `low_count`, and `fix_available_count` per target.
+- Package inventory: `software.inventory`, filtered by package name, host, or container and the latest successful inventory `recense.scan.id`.
+- CVE details: `vulnerability.finding`, filtered by `recense.vulnerability.severity`, `recense.package.name`, `recense.vulnerability.id`, and `recense.vulnerability.fix.available`.
+- Daily totals: `vulnerability.scan_completed` with `recense.status = success`; chart `recense.vulnerability.critical_count`, `recense.vulnerability.high_count`, `recense.vulnerability.medium_count`, `recense.vulnerability.low_count`, and `recense.vulnerability.fix_available_count` per target.
 
 Keep all detected packages in scope. Use dashboard filters to prioritize High/Critical findings and available fixes. Counts represent package/advisory matches, not unique CVEs. Choose the latest successful scan per target before aggregating; summing several days repeats findings. Show failed scans and scan age separately.
+
+Schema 3 uses standard OpenTelemetry names for service, host, cluster, and deployment identity. All custom fields use `recense.`. Scanned-container metadata uses `recense.target.*`; collector resource attributes identify the Recense pod. Old field aliases are not emitted.

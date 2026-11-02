@@ -24,9 +24,9 @@ docker run --rm --network=none --memory=512m --cpus=0.25 \
 python3 - "$fixture/events.jsonl" <<'PY'
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1])]
-names = {r['package_name'] for r in rows if r['event_type'] == 'software.inventory'}
+names = {r['recense.package.name'] for r in rows if r['recense.event.type'] == 'software.inventory'}
 assert 'recense-control-mnt' in names, names
 assert not {'recense-storage-containerd', 'recense-storage-kubelet'} & names, names
-assert rows[-1]['event_type'] == 'agent.collection_completed' and rows[-1]['status'] == 'success'
+assert rows[-1]['recense.event.type'] == 'agent.collection_completed' and rows[-1]['recense.status'] == 'success'
 print('Verified EKS backing storage is excluded while ordinary /mnt software remains covered')
 PY

@@ -15,7 +15,7 @@ while [ "$i" -lt 180 ]; do
   if python3 - "$log" <<'PY'
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1])]
-raise SystemExit(0 if any(r['event_type'] == 'agent.collection_completed' for r in rows) else 1)
+raise SystemExit(0 if any(r['recense.event.type'] == 'agent.collection_completed' for r in rows) else 1)
 PY
   then break; fi
   sleep 10
@@ -24,11 +24,11 @@ done
 python3 - "$log" <<'PY'
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1])]
-failures = [r for r in rows if r.get('status') == 'failed']
+failures = [r for r in rows if r.get('recense.status') == 'failed']
 assert not failures, failures
-assert any(r['event_type'] == 'agent.collection_completed' and r['status'] == 'success' for r in rows), 'collection did not finish'
-assert any(r['event_type'] == 'container.inventory' and r['container_runtime'] == 'containerd' for r in rows)
-assert any(r['event_type'] == 'vulnerability.scan_completed' and r['target_type'] == 'container' for r in rows)
-assert any(r['event_type'] == 'host.updates' and r['status'] == 'unsupported' for r in rows)
+assert any(r['recense.event.type'] == 'agent.collection_completed' and r['recense.status'] == 'success' for r in rows), 'collection did not finish'
+assert any(r['recense.event.type'] == 'container.inventory' and r['recense.target.container.runtime'] == 'containerd' for r in rows)
+assert any(r['recense.event.type'] == 'vulnerability.scan_completed' and r['recense.target.type'] == 'container' for r in rows)
+assert any(r['recense.event.type'] == 'host.updates' and r['recense.status'] == 'unsupported' for r in rows)
 print('Verified real containerd discovery and DaemonSet host/container filesystem scanning')
 PY

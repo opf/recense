@@ -46,13 +46,13 @@ func hostInventory(c Config) (Event, error) {
 	if kernel == "" {
 		kernel = readText("/", "proc/sys/kernel/osrelease")
 	}
-	event := Event{"host_id": id, "host_name": name, "os_id": osInfo["ID"], "os_name": osInfo["NAME"], "os_version": osInfo["VERSION_ID"], "kernel_release": kernel, "architecture": runtime.GOARCH, "inventory_scope": "host"}
+	event := Event{"host.id": id, "host.name": name, "recense.host.os.id": osInfo["ID"], "recense.host.os.name": osInfo["NAME"], "recense.host.os.version": osInfo["VERSION_ID"], "recense.host.kernel.release": kernel, "host.arch": runtime.GOARCH, "recense.inventory.scope": "host"}
 	if osInfo["ID"] == "ubuntu" {
 		_, err := os.Stat(filepath.Join(c.Root, "run/reboot-required"))
 		if err == nil {
-			event["reboot_required"] = true
+			event["recense.host.reboot_required"] = true
 		} else if os.IsNotExist(err) {
-			event["reboot_required"] = false
+			event["recense.host.reboot_required"] = false
 		}
 	}
 	return event, nil
@@ -100,7 +100,7 @@ func parseOSRelease(s string) map[string]string {
 // A host mount does not make the container's APT/DNF a host package manager.
 func checkUpdates(ctx context.Context, c Config) Event {
 	if c.Root != "/" {
-		return Event{"status": "unsupported", "reason": "package-manager update checks require a native host installation"}
+		return Event{"recense.status": "unsupported", "recense.reason": "package-manager update checks require a native host installation"}
 	}
 	data := readText(c.Root, "usr/lib/os-release")
 	if data == "" {
@@ -115,29 +115,29 @@ func checkUpdates(ctx context.Context, c Config) Event {
 		args = []string{"-c", ubuntuUpdates}
 	case "amzn":
 		if distro["VERSION_ID"] != "2023" {
-			return Event{"status": "unsupported", "reason": "update checks support Amazon Linux 2023 and Ubuntu"}
+			return Event{"recense.status": "unsupported", "recense.reason": "update checks support Amazon Linux 2023 and Ubuntu"}
 		}
 		name = "dnf"
 		args = []string{"-q", "--refresh", "--releasever=latest", "updateinfo", "list", "--security", "--available"}
 	default:
-		return Event{"status": "unsupported", "reason": "unsupported package manager"}
+		return Event{"recense.status": "unsupported", "recense.reason": "unsupported package manager"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	output, err := commandOutput(ctx, name, args, nil, 4<<20)
 	if err != nil {
-		return Event{"status": "failed", "error": err.Error()}
+		return Event{"recense.status": "failed", "recense.error": err.Error()}
 	}
-	event := Event{"status": "success", "checked_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	event := Event{"recense.status": "success", "recense.host.updates.checked_at": time.Now().UTC().Format(time.RFC3339Nano)}
 	if distro["ID"] == "ubuntu" {
 		if err := json.Unmarshal(output, &event); err != nil {
-			return Event{"status": "failed", "error": "invalid Ubuntu update check output"}
+			return Event{"recense.status": "failed", "recense.error": "invalid Ubuntu update check output"}
 		}
 		// This is the last successful metadata refresh, not the time this query ran.
 		if st, err := os.Stat("/var/lib/apt/periodic/update-success-stamp"); err == nil {
-			event["metadata_refreshed_at"] = st.ModTime().UTC().Format(time.RFC3339Nano)
+			event["recense.host.updates.metadata_refreshed_at"] = st.ModTime().UTC().Format(time.RFC3339Nano)
 		}
-		event["metadata_policy"] = "existing apt cache; refreshed by the host's apt timers"
+		event["recense.host.updates.metadata_policy"] = "existing apt cache; refreshed by the host's apt timers"
 	} else {
 		packages := map[string]bool{}
 		for _, line := range strings.Split(string(output), "\n") {
@@ -146,9 +146,9 @@ func checkUpdates(ctx context.Context, c Config) Event {
 				packages[fields[len(fields)-1]] = true
 			}
 		}
-		event["security_updates_pending"] = len(packages)
-		event["repository_release"] = "latest"
-		event["metadata_refreshed_at"] = event["checked_at"]
+		event["recense.host.updates.security_updates_pending"] = len(packages)
+		event["recense.host.updates.repository_release"] = "latest"
+		event["recense.host.updates.metadata_refreshed_at"] = event["recense.host.updates.checked_at"]
 	}
 	return event
 }
@@ -163,5 +163,5 @@ for package in cache:
            and any(o.archive.endswith('-security') and o.origin in ('Ubuntu', 'UbuntuESM', 'UbuntuESMApps') for o in v.origins)
            for v in package.versions):
         count += 1
-print(json.dumps({'security_updates_pending': count}))
+print(json.dumps({'recense.host.updates.security_updates_pending': count}))
 `

@@ -37,10 +37,10 @@ func TestHostInventoryUsesMountedHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event["host_id"] != "machine-123" || event["kernel_release"] != "6.8.0-test" || event["os_name"] != "Ubuntu Linux" {
+	if event["host.id"] != "machine-123" || event["recense.host.kernel.release"] != "6.8.0-test" || event["recense.host.os.name"] != "Ubuntu Linux" {
 		t.Fatalf("wrong host: %#v", event)
 	}
-	if got := checkUpdates(context.Background(), Config{Root: root}); got["status"] != "unsupported" {
+	if got := checkUpdates(context.Background(), Config{Root: root}); got["recense.status"] != "unsupported" {
 		t.Fatalf("must not query agent OS: %#v", got)
 	}
 }
@@ -74,7 +74,7 @@ const findingsFixture = `{"matches":[{"artifact":{"id":"pkg1","name":"openssl","
 
 func TestScanInventoryFindingsAndCompletion(t *testing.T) {
 	var b bytes.Buffer
-	e := &emitter{writer: &b, base: Event{"host_id": "host-1"}}
+	e := &emitter{writer: &b, base: Event{"host.id": "host-1"}}
 	c := Config{Syft: fakeScanner(t, "syft", inventoryFixture, 0), Grype: fakeScanner(t, "grype", findingsFixture, 0), Timeout: time.Second, Root: "/"}
 	if err := scan(context.Background(), c, e, target{Kind: "host", ID: "host-1", Source: "dir:/fixture"}); err != nil {
 		t.Fatal(err)
@@ -83,18 +83,18 @@ func TestScanInventoryFindingsAndCompletion(t *testing.T) {
 	if len(rows) != 5 {
 		t.Fatalf("got %d events: %#v", len(rows), rows)
 	}
-	if rows[1]["package_name"] != "safe-package" {
+	if rows[1]["recense.package.name"] != "safe-package" {
 		t.Fatal("inventory omitted a package without vulnerabilities")
 	}
 	final := rows[len(rows)-1]
-	if final["vulnerability_db_built_at"] != "2026-01-01T00:00:00Z" {
+	if final["recense.vulnerability.db.built_at"] != "2026-01-01T00:00:00Z" {
 		t.Fatal("missing database provenance")
 	}
-	if final["status"] != "success" || final["high_count"] != float64(1) || final["finding_count"] != float64(1) {
+	if final["recense.status"] != "success" || final["recense.vulnerability.high_count"] != float64(1) || final["recense.vulnerability.count"] != float64(1) {
 		t.Fatalf("bad completion: %#v", final)
 	}
 	for _, e := range rows {
-		if e["scan_id"] != final["scan_id"] {
+		if e["recense.scan.id"] != final["recense.scan.id"] {
 			t.Fatal("inconsistent scan IDs")
 		}
 	}
@@ -116,10 +116,10 @@ func TestScanFailuresNeverReportClean(t *testing.T) {
 			}
 			rows := events(t, &b)
 			last := rows[len(rows)-1]
-			if last["status"] != "failed" {
+			if last["recense.status"] != "failed" {
 				t.Fatalf("bad status: %#v", last)
 			}
-			if _, ok := last["finding_count"]; ok {
+			if _, ok := last["recense.vulnerability.count"]; ok {
 				t.Fatal("failure reported a finding count")
 			}
 		})
@@ -134,7 +134,7 @@ func TestEmptySuccessfulScan(t *testing.T) {
 	}
 	rows := events(t, &b)
 	last := rows[len(rows)-1]
-	if last["status"] != "success" || last["finding_count"] != float64(0) {
+	if last["recense.status"] != "success" || last["recense.vulnerability.count"] != float64(0) {
 		t.Fatalf("missing clean result: %#v", last)
 	}
 }
@@ -254,7 +254,7 @@ func TestHostAbsoluteSymlinksDoNotReadAgentFilesystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event["reboot_required"] != true || event["os_version"] != "24.04" {
+	if event["recense.host.reboot_required"] != true || event["recense.host.os.version"] != "24.04" {
 		t.Fatalf("read agent filesystem: %#v", event)
 	}
 }
@@ -276,7 +276,7 @@ func TestProcessChangeDiscardsInventory(t *testing.T) {
 			t.Fatal("accepted changed process")
 		}
 		rows := events(t, &b)
-		if len(rows) != 1 || rows[0]["status"] != "failed" {
+		if len(rows) != 1 || rows[0]["recense.status"] != "failed" {
 			t.Fatalf("published stale inventory: %#v", rows)
 		}
 	}
