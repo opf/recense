@@ -221,3 +221,29 @@ func TestEmitterReopensRotatedLog(t *testing.T) {
 		t.Fatalf("wrong log: %s", b)
 	}
 }
+
+func TestHostAbsoluteSymlinksDoNotReadAgentFilesystem(t *testing.T) {
+	root := fixtureHost(t)
+	if err := os.Symlink("/usr/lib/os-release", filepath.Join(root, "etc/os-release")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "run"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "var"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/run", filepath.Join(root, "var/run")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run/reboot-required"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	event, err := hostInventory(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event["reboot_required"] != true || event["os_version"] != "24.04" {
+		t.Fatalf("read agent filesystem: %#v", event)
+	}
+}

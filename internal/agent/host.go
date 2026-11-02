@@ -14,11 +14,11 @@ import (
 )
 
 func hostInventory(c Config) (Event, error) {
-	// /etc/os-release is commonly an absolute symlink; prefer its canonical target
-	// under the mounted host rather than accidentally reading the agent's OS.
-	data, err := os.ReadFile(filepath.Join(c.Root, "usr/lib/os-release"))
+	// Follow relative symlinks within the host root. If /etc/os-release uses an
+	// absolute symlink, read its canonical location without escaping the host root.
+	data, err := readRootFile(c.Root, "etc/os-release")
 	if err != nil {
-		data, err = os.ReadFile(filepath.Join(c.Root, "etc/os-release"))
+		data, err = readRootFile(c.Root, "usr/lib/os-release")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read host os-release: %w", err)
@@ -48,7 +48,7 @@ func hostInventory(c Config) (Event, error) {
 	}
 	event := Event{"host_id": id, "host_name": name, "os_id": osInfo["ID"], "os_name": osInfo["NAME"], "os_version": osInfo["VERSION_ID"], "kernel_release": kernel, "architecture": runtime.GOARCH, "inventory_scope": "host"}
 	if osInfo["ID"] == "ubuntu" {
-		_, err := os.Stat(filepath.Join(c.Root, "var/run/reboot-required"))
+		_, err := os.Stat(filepath.Join(c.Root, "run/reboot-required"))
 		if err == nil {
 			event["reboot_required"] = true
 		} else if os.IsNotExist(err) {
@@ -58,8 +58,17 @@ func hostInventory(c Config) (Event, error) {
 	return event, nil
 }
 
+func readRootFile(root, path string) ([]byte, error) {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return r.ReadFile(path)
+}
+
 func readText(root, path string) string {
-	b, err := os.ReadFile(filepath.Join(root, path))
+	b, err := readRootFile(root, path)
 	if err != nil {
 		return ""
 	}
