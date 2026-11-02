@@ -1,0 +1,4 @@
+/dist/
+/recense
+*.test
+coverage.out

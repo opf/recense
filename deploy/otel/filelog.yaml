@@ -1,0 +1,27 @@
+# Merge into your EXISTING OpenTelemetry Collector configuration.
+# Keep your existing SigNoz exporter and wire filelog/recense into its logs pipeline.
+receivers:
+  filelog/recense:
+    include: [/var/log/recense/events.jsonl]
+    start_at: beginning
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.timestamp
+          layout_type: gotime
+          layout: '2006-01-02T15:04:05.999999999Z07:00'
+      - type: move
+        from: attributes["service.name"]
+        to: resource["service.name"]
+      - type: move
+        from: attributes.host_id
+        to: resource["host.id"]
+      - type: move
+        from: attributes.host_name
+        to: resource["host.name"]
+# service:
+#   pipelines:
+#     logs:
+#       receivers: [filelog/recense, ...your existing receivers...]
+#       processors: [...your existing processors...]
+#       exporters: [...your existing SigNoz exporter...]
