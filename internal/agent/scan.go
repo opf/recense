@@ -9,12 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
 
-type target struct{ Kind, ID, Source string }
+type target struct{ Kind, ID, Source, Platform string }
 type packageRecord struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -32,6 +31,9 @@ type sbom struct {
 			ImageID        string   `json:"imageID"`
 			ManifestDigest string   `json:"manifestDigest"`
 			RepoDigests    []string `json:"repoDigests"`
+			OS             string   `json:"os"`
+			Architecture   string   `json:"architecture"`
+			Variant        string   `json:"architectureVariant"`
 		} `json:"metadata"`
 	} `json:"source"`
 }
@@ -58,7 +60,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		return err
 	}
 	started := time.Now()
-	base := Event{"scan_id": scanID, "target_type": t.Kind, "target_id": t.ID}
+	base := Event{"scan_id": scanID, "target_type": t.Kind, "target_id": t.ID, "target_platform": t.Platform}
 	emit := func(kind string, fields Event) error {
 		merged := Event{}
 		for k, v := range base {
@@ -89,8 +91,8 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	}
 	env := []string{"CONTAINERD_ADDRESS=" + c.Socket, "CONTAINERD_NAMESPACE=" + c.Namespace, "DOCKER_HOST=unix://" + c.Socket}
 	args := []string{"scan", t.Source, "-o", "syft-json", "-c", config, "--quiet"}
-	if t.Kind == "container_image" {
-		args = append(args, "--platform", "linux/"+runtime.GOARCH)
+	if t.Platform != "" {
+		args = append(args, "--platform", t.Platform)
 	}
 	if t.Kind == "host" {
 		for _, path := range []string{"proc", "sys", "dev", "run", "tmp", "var/lib/docker", "var/lib/containerd", "var/lib/kubelet", "var/lib/recense"} {
@@ -110,7 +112,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	if packages.Artifacts == nil {
 		return fmt.Errorf("Syft report is missing artifacts")
 	}
-	if t.Kind == "container_image" && !imageMatches(packages, t.ID) {
+	if t.Kind == "container_image" && !imageMatches(packages, t.ID, t.Platform) {
 		return fmt.Errorf("scanned image ID does not match the running container; image reference may have changed")
 	}
 	for _, p := range packages.Artifacts {
@@ -176,13 +178,28 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 
 // Runtimes may identify images by config, platform manifest, or image index
 // digest. Docker's containerd image store uses index digests for multiarch images.
-func imageMatches(s sbom, expected string) bool {
+func imageMatches(s sbom, expected, platform string) bool {
 	m := s.Source.Metadata
 	if expected == "" {
 		return false
 	}
 	if m.ImageID == expected || m.ManifestDigest == expected {
 		return true
+	}
+	// Index equality alone is insufficient: the running container's platform
+	// must also match. Without a platform, require config/manifest equality.
+	if platform == "" {
+		return false
+	}
+	parts := strings.Split(platform, "/")
+	if len(parts) < 2 || m.OS != parts[0] || m.Architecture != parts[1] {
+		return false
+	}
+	if len(parts) > 2 && m.Variant != parts[2] {
+		// OCI's baseline variants can be omitted from image config metadata.
+		if !(m.Variant == "" && ((parts[1] == "arm64" && parts[2] == "v8") || (parts[1] == "amd64" && parts[2] == "v1"))) {
+			return false
+		}
 	}
 	for _, ref := range m.RepoDigests {
 		_, digest, ok := strings.Cut(ref, "@")

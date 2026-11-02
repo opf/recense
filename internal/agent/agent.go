@@ -130,7 +130,7 @@ func cycle(ctx context.Context, c Config, e *emitter) error {
 	} else {
 		for _, container := range containers {
 			event := Event{"collection_id": id, "container_id": container.ID, "container_name": container.Name,
-				"image_id": container.ImageID, "image_name": container.ImageName, "container_runtime": runtimeName,
+				"image_id": container.ImageID, "image_platform": container.Platform, "image_name": container.ImageName, "container_runtime": runtimeName,
 				"k8s_namespace_name": container.PodNamespace, "k8s_pod_name": container.PodName, "k8s_container_name": container.PodContainer}
 			if err := e.emit("container.inventory", event); err != nil {
 				return err
@@ -145,11 +145,12 @@ func cycle(ctx context.Context, c Config, e *emitter) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if seen[container.ImageID] {
+			key := container.ImageID + "|" + container.Platform
+			if seen[key] {
 				continue
 			}
-			seen[container.ImageID] = true
-			t := target{Kind: "container_image", ID: container.ImageID, Source: runtimeName + ":" + container.ImageSource}
+			seen[key] = true
+			t := target{Kind: "container_image", ID: container.ImageID, Source: runtimeName + ":" + container.ImageSource, Platform: container.Platform}
 			if err := scan(ctx, c, e, t); err != nil {
 				failures = append(failures, err)
 			}

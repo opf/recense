@@ -80,18 +80,18 @@ Every record has an RFC3339 UTC `timestamp`, `schema_version=1`, `service.name=r
 | `vulnerability.scan_completed` | Successful scan and counts, or failure without counts |
 | `agent.collection_completed` | Result of the whole collection cycle |
 
-Scan events share a random `scan_id`, `target_type` (`host` or `container_image`), and `target_id`. Container discovery events share a `collection_id`. Software and vulnerability records are snapshots, not change events.
+Scan events share a random `scan_id`, `target_type` (`host` or `container_image`), `target_id`, and `target_platform`. Container discovery events share a `collection_id`. Software and vulnerability records are snapshots, not change events.
 
-For current findings, select the latest **successful** vulnerability scan for each `(host_id, target_type, target_id)`, then select its findings by `scan_id`. Show the age of that scan separately. A newer failure must not erase previous findings or appear healthy. Inventory uses its own successful completion marker. Container presence uses the latest successful discovery snapshot; absent containers/images are no longer active on that host. Historical findings remain in logs until retention expires.
+For current findings, select the latest **successful** vulnerability scan for each `(host_id, target_type, target_id, target_platform)`, then select its findings by `scan_id`. Show the age of that scan separately. A newer failure must not erase previous findings or appear healthy. Inventory uses its own successful completion marker. Container presence uses the latest successful discovery snapshot; absent containers/images are no longer active on that host. Historical findings remain in logs until retention expires.
 
 Do not count every finding in a time window as a current vulnerability: repeated scans repeat findings. Empty successful scans explicitly report zero. A terminated process may leave records without a completion marker; these are incomplete snapshots.
 
 ## Coverage and limits
 
-- Host scans read the host filesystem; image scans analyze images used by running containers. Duplicate images are scanned once per host cycle. Every cycle rescans against Grype's updated vulnerability database, including unchanged images.
+- Host scans read the host filesystem; image scans analyze images used by running containers. Duplicate image/platform pairs are scanned once per host cycle. Every cycle rescans against Grype's updated vulnerability database, including unchanged images.
 - Host scans exclude `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/lib/docker`, `/var/lib/containerd`, `/var/lib/kubelet`, and `/var/lib/recense`. Container storage is handled through image scans. Software under excluded paths is not covered.
 - Image scans do not cover container writable-layer changes or mounted application data. Inventoried binaries are installed versions, not proof that a process is running them.
-- CRI discovery uses local image tags when available, otherwise repository digests. Every image scan verifies Syft’s config, manifest, or repository digest against the discovered immutable image ID before emitting results, so a moved tag cannot silently scan the wrong image. The containerd namespace defaults to `k8s.io`.
+- CRI discovery uses local image tags when available, otherwise repository digests. The original container image name is preserved separately from the scanner reference. Every image scan verifies Syft’s config, manifest, or repository digest against the discovered immutable image ID before emitting results, so a moved tag cannot silently scan the wrong image. Docker index digests also require a matching platform obtained from the running container. The containerd namespace defaults to `k8s.io`.
 - Ubuntu update checks use `python3-apt` and existing APT metadata. Recense does not refresh APT; keep the host's normal refresh timers enabled. Metadata refresh time is included when the Ubuntu success stamp exists. Missing `python3-apt` is reported as a failed check.
 - Amazon Linux 2023 update checks use DNF security advisories with `--refresh --releasever=latest`. They refresh metadata but do not install packages. Counts are distinct offered package-version entries, not CVE counts. Amazon Linux 2 update checks are unsupported.
 - In a DaemonSet (`--root=/host`), package-manager update checks are explicitly unsupported. Running APT/DNF in the agent container would inspect the wrong OS. Grype still scans the node packages for vulnerabilities.

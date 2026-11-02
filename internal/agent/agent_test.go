@@ -154,6 +154,10 @@ func TestDockerDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/containers/c1/json" {
+			_, _ = w.Write([]byte(`{"ImageManifestDescriptor":{"Platform":{"os":"linux","architecture":"amd64"}}}`))
+			return
+		}
 		if r.URL.Path != "/containers/json" || r.URL.Query().Get("all") != "false" {
 			t.Errorf("unexpected request: %s", r.URL)
 		}
@@ -266,17 +270,33 @@ func TestImageIdentityMismatchFailsBeforePublishingInventory(t *testing.T) {
 
 func TestImageIdentitySupportsRuntimeDigestKinds(t *testing.T) {
 	var s sbom
-	if err := json.Unmarshal([]byte(`{"source":{"metadata":{"imageID":"sha256:config","manifestDigest":"sha256:manifest","repoDigests":["alpine@sha256:index"]}}}`), &s); err != nil {
+	if err := json.Unmarshal([]byte(`{"source":{"metadata":{"imageID":"sha256:config","manifestDigest":"sha256:manifest","repoDigests":["alpine@sha256:index"],"os":"linux","architecture":"arm64"}}}`), &s); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"sha256:config", "sha256:manifest", "sha256:index"} {
-		if !imageMatches(s, id) {
+		if !imageMatches(s, id, "linux/arm64") {
 			t.Fatalf("rejected runtime digest %s", id)
 		}
 	}
 	for _, id := range []string{"", "sha256:other", "alpine:latest"} {
-		if imageMatches(s, id) {
+		if imageMatches(s, id, "linux/arm64") {
 			t.Fatalf("accepted wrong identity %s", id)
 		}
+	}
+}
+
+func TestImageIndexRequiresRunningPlatform(t *testing.T) {
+	var s sbom
+	if err := json.Unmarshal([]byte(`{"source":{"metadata":{"imageID":"sha256:armconfig","repoDigests":["alpine@sha256:index"],"os":"linux","architecture":"arm64"}}}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if imageMatches(s, "sha256:index", "linux/amd64") {
+		t.Fatal("accepted arm64 scan for emulated amd64 container")
+	}
+	if imageMatches(s, "sha256:index", "") {
+		t.Fatal("accepted ambiguous image index")
+	}
+	if !imageMatches(s, "sha256:index", "linux/arm64/v8") {
+		t.Fatal("rejected running arm64 variant")
 	}
 }

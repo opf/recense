@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	cri "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
-type container struct{ ID, Name, ImageID, ImageName, ImageSource, PodName, PodNamespace, PodContainer string }
+type container struct{ ID, Name, ImageID, ImageName, ImageSource, Platform, PodName, PodNamespace, PodContainer string }
 
 func discover(ctx context.Context, c Config) ([]container, string, string, error) {
 	if c.Runtime == "none" {
@@ -92,7 +93,35 @@ func dockerContainers(ctx context.Context, socket string) ([]container, error) {
 		if r.ImageID == "" {
 			return nil, fmt.Errorf("Docker container %s has no immutable image ID", r.ID)
 		}
-		result = append(result, container{ID: r.ID, Name: name, ImageID: r.ImageID, ImageSource: r.ImageID, ImageName: r.Image})
+		// Docker's image store may identify the image by a multi-platform index.
+		// Inspect the container, not the host, to select the variant actually running.
+		inspectReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/containers/"+r.ID+"/json", nil)
+		inspectResponse, err := client.Do(inspectReq)
+		if err != nil {
+			return nil, fmt.Errorf("Docker container inspection: %w", err)
+		}
+		var inspect struct {
+			ImageManifestDescriptor *struct {
+				Platform *struct{ OS, Architecture, Variant string }
+			}
+		}
+		decodeErr := json.NewDecoder(io.LimitReader(inspectResponse.Body, 4<<20)).Decode(&inspect)
+		inspectResponse.Body.Close()
+		if inspectResponse.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("Docker inspection returned HTTP %d", inspectResponse.StatusCode)
+		}
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		platform := ""
+		if inspect.ImageManifestDescriptor != nil && inspect.ImageManifestDescriptor.Platform != nil {
+			p := inspect.ImageManifestDescriptor.Platform
+			platform = p.OS + "/" + p.Architecture
+			if p.Variant != "" {
+				platform += "/" + p.Variant
+			}
+		}
+		result = append(result, container{ID: r.ID, Name: name, ImageID: r.ImageID, ImageSource: r.ImageID, ImageName: r.Image, Platform: platform})
 	}
 	return result, nil
 }
@@ -134,7 +163,7 @@ func criContainers(ctx context.Context, socket string) ([]container, error) {
 		if source == "" {
 			return nil, fmt.Errorf("CRI image %s has no local image reference", r.ImageRef)
 		}
-		result = append(result, container{ID: r.Id, Name: name, ImageID: status.Image.Id, ImageSource: source, ImageName: source, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
+		result = append(result, container{ID: r.Id, Name: name, ImageID: status.Image.Id, ImageSource: source, ImageName: r.GetImage().GetImage(), Platform: "linux/" + runtime.GOARCH, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
 	}
 	return result, nil
 }
