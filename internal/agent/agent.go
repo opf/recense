@@ -78,7 +78,9 @@ func Run(ctx context.Context, c Config) error {
 		default:
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "collection cycle:", err)
+			if emitErr := e.emit("agent.error", Event{"error": err.Error()}); emitErr != nil {
+				return emitErr
+			}
 		}
 		timer := time.NewTimer(c.Interval)
 		select {

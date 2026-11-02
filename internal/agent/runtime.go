@@ -114,12 +114,8 @@ func criContainers(ctx context.Context, socket string) ([]container, error) {
 		if r.Metadata != nil {
 			name = r.Metadata.Name
 		}
-		image := ""
-		if r.Image != nil {
-			image = r.Image.Image
-		}
-		// CRI imageRef can be a config digest. Resolve it to a repository digest
-		// known to containerd's image store so Syft can open it without pulling tags.
+		// Use a local image name; CRI may return synthetic import-* repository
+		// digests that are not registry references. Verify the config ID after scanning.
 		status, err := cri.NewImageServiceClient(conn).ImageStatus(ctx, &cri.ImageStatusRequest{Image: &cri.ImageSpec{Image: r.ImageRef}})
 		if err != nil {
 			return nil, fmt.Errorf("CRI image status: %w", err)
@@ -128,15 +124,15 @@ func criContainers(ctx context.Context, socket string) ([]container, error) {
 			return nil, fmt.Errorf("CRI image %s has no immutable image ID", r.ImageRef)
 		}
 		source := ""
-		if len(status.Image.RepoDigests) > 0 {
-			source = status.Image.RepoDigests[0]
-		} else if len(status.Image.RepoTags) > 0 {
+		if len(status.Image.RepoTags) > 0 {
 			source = status.Image.RepoTags[0]
+		} else if len(status.Image.RepoDigests) > 0 {
+			source = status.Image.RepoDigests[0]
 		}
 		if source == "" {
 			return nil, fmt.Errorf("CRI image %s has no local image reference", r.ImageRef)
 		}
-		result = append(result, container{ID: r.Id, Name: name, ImageID: status.Image.Id, ImageSource: source, ImageName: image, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
+		result = append(result, container{ID: r.Id, Name: name, ImageID: status.Image.Id, ImageSource: source, ImageName: source, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
 	}
 	return result, nil
 }

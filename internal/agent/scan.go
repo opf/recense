@@ -29,7 +29,9 @@ type sbom struct {
 	Artifacts []packageRecord `json:"artifacts"`
 	Source    struct {
 		Metadata struct {
-			ImageID string `json:"imageID"`
+			ImageID        string   `json:"imageID"`
+			ManifestDigest string   `json:"manifestDigest"`
+			RepoDigests    []string `json:"repoDigests"`
 		} `json:"metadata"`
 	} `json:"source"`
 }
@@ -108,7 +110,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	if packages.Artifacts == nil {
 		return fmt.Errorf("Syft report is missing artifacts")
 	}
-	if t.Kind == "container_image" && packages.Source.Metadata.ImageID != t.ID {
+	if t.Kind == "container_image" && !imageMatches(packages, t.ID) {
 		return fmt.Errorf("scanned image ID does not match the running container; image reference may have changed")
 	}
 	for _, p := range packages.Artifacts {
@@ -170,6 +172,25 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		fields[severity+"_count"] = count
 	}
 	return emit("vulnerability.scan_completed", fields)
+}
+
+// Runtimes may identify images by config, platform manifest, or image index
+// digest. Docker's containerd image store uses index digests for multiarch images.
+func imageMatches(s sbom, expected string) bool {
+	m := s.Source.Metadata
+	if expected == "" {
+		return false
+	}
+	if m.ImageID == expected || m.ManifestDigest == expected {
+		return true
+	}
+	for _, ref := range m.RepoDigests {
+		_, digest, ok := strings.Cut(ref, "@")
+		if ok && digest == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func packageFields(p packageRecord) Event {

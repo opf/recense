@@ -182,7 +182,7 @@ func (f *criFixture) ListContainers(_ context.Context, r *cri.ListContainersRequ
 	return &cri.ListContainersResponse{Containers: []*cri.Container{{Id: "c1", ImageRef: "sha256:config", Image: &cri.ImageSpec{Image: "app:latest"}, Metadata: &cri.ContainerMetadata{Name: "api"}, Labels: map[string]string{"io.kubernetes.pod.name": "api-123", "io.kubernetes.pod.namespace": "prod"}}}}, nil
 }
 func (f *criFixture) ImageStatus(_ context.Context, _ *cri.ImageStatusRequest) (*cri.ImageStatusResponse, error) {
-	return &cri.ImageStatusResponse{Image: &cri.Image{Id: "sha256:config", RepoDigests: []string{"registry/app@sha256:manifest"}}}, nil
+	return &cri.ImageStatusResponse{Image: &cri.Image{Id: "sha256:config", RepoTags: []string{"registry.example.com/app:latest"}, RepoDigests: []string{"import-date@sha256:manifest"}}}, nil
 }
 func TestCRIDiscoveryResolvesDigest(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "c.sock")
@@ -200,7 +200,7 @@ func TestCRIDiscoveryResolvesDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ImageID != "sha256:config" || rows[0].ImageSource != "registry/app@sha256:manifest" || rows[0].PodNamespace != "prod" {
+	if len(rows) != 1 || rows[0].ImageID != "sha256:config" || rows[0].ImageSource != "registry.example.com/app:latest" || rows[0].PodNamespace != "prod" {
 		t.Fatalf("bad discovery: %#v", rows)
 	}
 }
@@ -261,5 +261,22 @@ func TestImageIdentityMismatchFailsBeforePublishingInventory(t *testing.T) {
 	rows := events(t, &b)
 	if len(rows) != 1 || rows[0]["status"] != "failed" {
 		t.Fatalf("published incorrect inventory: %#v", rows)
+	}
+}
+
+func TestImageIdentitySupportsRuntimeDigestKinds(t *testing.T) {
+	var s sbom
+	if err := json.Unmarshal([]byte(`{"source":{"metadata":{"imageID":"sha256:config","manifestDigest":"sha256:manifest","repoDigests":["alpine@sha256:index"]}}}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"sha256:config", "sha256:manifest", "sha256:index"} {
+		if !imageMatches(s, id) {
+			t.Fatalf("rejected runtime digest %s", id)
+		}
+	}
+	for _, id := range []string{"", "sha256:other", "alpine:latest"} {
+		if imageMatches(s, id) {
+			t.Fatalf("accepted wrong identity %s", id)
+		}
 	}
 }
