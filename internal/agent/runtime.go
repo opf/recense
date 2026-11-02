@@ -32,6 +32,8 @@ func discover(ctx context.Context, c Config) ([]container, string, string, error
 				name = candidate.name
 				socket = candidate.path
 				break
+			} else if !os.IsNotExist(err) {
+				return nil, "", "", fmt.Errorf("inspect runtime socket %s: %w", candidate.path, err)
 			}
 		}
 		if name == "auto" {

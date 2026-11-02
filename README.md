@@ -105,12 +105,13 @@ Do not count every finding in a time window as a current vulnerability: repeated
 ```sh
 go test -race ./...
 go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 go build ./cmd/recense
 helm lint charts/recense
 ```
 
 Go dependencies are pinned in `go.mod` / `go.sum`. Scanner versions are pinned in `scripts/package.sh` and `Dockerfile`. The release workflow builds Linux amd64/arm64 archives, a multi-architecture image at `ghcr.io/opf/recense`, and a packaged Helm chart. Keep chart `version`, `appVersion`, and image tag aligned with each release tag.
 
-Before a release, run CI and verify both VM fixture collection and container runtime discovery. Unit tests use fake scanners and local Docker/CRI API servers; they do not inspect the developer's host or containers.
+Before a release, run CI and verify both VM fixture collection and container runtime discovery. Unit tests use fake scanners and local Docker/CRI API servers; they do not inspect the developer's host or containers. CI also runs real Syft/Grype scans against a synthetic host, Docker images, and the Helm DaemonSet in a disposable kind cluster.
 
 Apache-2.0. Bundled scanners and their licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
