@@ -1,0 +1,38 @@
+name: CI
+on:
+  push:
+    branches: [main, "auto/**"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l cmd internal)"
+      - run: shellcheck -s sh install.sh scripts/*.sh
+      - uses: azure/setup-helm@v4.3.0
+      - run: helm lint charts/recense && helm template recense charts/recense > /tmp/daemonset.yaml
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: recense:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker run --rm recense:test --version
+      - run: docker run --rm --entrypoint syft recense:test version
+      - run: docker run --rm --entrypoint grype recense:test version
+      - name: End-to-end host and Docker collection
+        run: scripts/smoke-docker.sh

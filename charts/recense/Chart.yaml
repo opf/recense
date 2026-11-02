@@ -1,0 +1,6 @@
+apiVersion: v2
+name: recense
+description: Host and container software inventory and vulnerability logs
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

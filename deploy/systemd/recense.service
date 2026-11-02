@@ -1,0 +1,25 @@
+[Unit]
+Description=Recense host and container inventory
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/recense/bin/recense --output /var/log/recense/events.jsonl
+Environment=PATH=/opt/recense/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=/var/lib/recense
+Environment=XDG_CACHE_HOME=/var/lib/recense/cache
+EnvironmentFile=-/etc/recense/environment
+WorkingDirectory=/var/lib/recense
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=15
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+CPUQuota=100%
+MemoryMax=2G
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
