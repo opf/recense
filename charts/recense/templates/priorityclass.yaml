@@ -1,0 +1,8 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}
+value: -1000
+globalDefault: false
+preemptionPolicy: Never
+description: Inventory scans yield scheduling and eviction priority to application workloads.

@@ -4,7 +4,7 @@ set -eu
 kind load docker-image recense:test --name recense
 helm upgrade --install recense charts/recense --namespace recense --create-namespace \
   --set image.repository=recense --set image.tag=test --set image.pullPolicy=Never \
-  --set clusterName=recense-test --set environment=test \
+  --set jitter=0s --set clusterName=recense-test --set environment=test \
   --set resources.limits.memory=3Gi --set resources.limits.cpu=2
 kubectl rollout status daemonset/recense -n recense --timeout=120s
 log=$(mktemp)
@@ -29,7 +29,7 @@ failures = [r for r in rows if r.get('status') == 'failed']
 assert not failures, failures
 assert any(r['event_type'] == 'agent.collection_completed' and r['status'] == 'success' for r in rows), 'collection did not finish'
 assert any(r['event_type'] == 'container.inventory' and r['container_runtime'] == 'containerd' for r in rows)
-assert any(r['event_type'] == 'vulnerability.scan_completed' and r['target_type'] == 'container_image' for r in rows)
+assert any(r['event_type'] == 'vulnerability.scan_completed' and r['target_type'] == 'container' for r in rows)
 assert any(r['event_type'] == 'host.updates' and r['status'] == 'unsupported' for r in rows)
-print('Verified real containerd discovery and DaemonSet host/image scanning')
+print('Verified real containerd discovery and DaemonSet host/container filesystem scanning')
 PY

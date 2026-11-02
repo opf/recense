@@ -16,6 +16,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       automountServiceAccountToken: false
+      priorityClassName: {{ .Release.Namespace }}-{{ .Release.Name }}
       terminationGracePeriodSeconds: 20
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
@@ -30,8 +31,8 @@ spec:
             - --root=/host
             - --runtime={{ .Values.runtime }}
             - --socket=/runtime/runtime.sock
-            - --containerd-namespace={{ .Values.containerdNamespace }}
             - --interval={{ .Values.interval }}
+            - --jitter={{ .Values.jitter }}
             - --scan-timeout={{ .Values.scanTimeout }}
           env:
             - name: RECENSE_HOST_NAME
@@ -49,13 +50,14 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
-              add: [DAC_READ_SEARCH]
+              add: [DAC_READ_SEARCH, SYS_PTRACE]
             seccompProfile:
               type: RuntimeDefault
           volumeMounts:
             - name: host
               mountPath: /host
               readOnly: true
+              mountPropagation: HostToContainer
             - name: runtime
               mountPath: /runtime/runtime.sock
               readOnly: true
@@ -74,7 +76,7 @@ spec:
             type: Socket
         - name: cache
           emptyDir:
-            sizeLimit: 4Gi
+            sizeLimit: 8Gi
         - name: tmp
           emptyDir:
-            sizeLimit: 4Gi
+            sizeLimit: 2Gi

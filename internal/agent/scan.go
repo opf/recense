@@ -13,7 +13,11 @@ import (
 	"time"
 )
 
-type target struct{ Kind, ID, Source, Platform string }
+type target struct {
+	Kind, ID, Source string
+	Excludes         []string
+	Validate         func() error
+}
 type packageRecord struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -26,17 +30,8 @@ type packageRecord struct {
 }
 type sbom struct {
 	Artifacts []packageRecord `json:"artifacts"`
-	Source    struct {
-		Metadata struct {
-			ImageID        string   `json:"imageID"`
-			ManifestDigest string   `json:"manifestDigest"`
-			RepoDigests    []string `json:"repoDigests"`
-			OS             string   `json:"os"`
-			Architecture   string   `json:"architecture"`
-			Variant        string   `json:"architectureVariant"`
-		} `json:"metadata"`
-	} `json:"source"`
 }
+
 type grypeReport struct {
 	Matches []struct {
 		Artifact      packageRecord `json:"artifact"`
@@ -60,7 +55,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		return err
 	}
 	started := time.Now()
-	base := Event{"scan_id": scanID, "target_type": t.Kind, "target_id": t.ID, "target_platform": t.Platform}
+	base := Event{"scan_id": scanID, "target_type": t.Kind, "target_id": t.ID}
 	emit := func(kind string, fields Event) error {
 		merged := Event{}
 		for k, v := range base {
@@ -89,15 +84,18 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	if err := os.WriteFile(config, []byte("check-for-app-update: false\n"), 0600); err != nil {
 		return err
 	}
-	env := []string{"CONTAINERD_ADDRESS=" + c.Socket, "CONTAINERD_NAMESPACE=" + c.Namespace, "DOCKER_HOST=unix://" + c.Socket}
-	args := []string{"scan", t.Source, "-o", "syft-json", "-c", config, "--quiet"}
-	if t.Platform != "" {
-		args = append(args, "--platform", t.Platform)
-	}
-	if t.Kind == "host" {
-		for _, path := range []string{"proc", "sys", "dev", "run", "tmp", "var/lib/docker", "var/lib/containerd", "var/lib/kubelet", "var/lib/recense"} {
-			args = append(args, "--exclude", "./"+path+"/**")
+	if t.Validate != nil {
+		if err := t.Validate(); err != nil {
+			return err
 		}
+	}
+	env := []string{"GOMEMLIMIT=512MiB", "GOMAXPROCS=1"}
+	args := []string{"scan", t.Source, "-o", "syft-json", "-c", config, "--quiet", "--parallelism", "1", "--override-default-catalogers", "image", "--base-path", strings.TrimPrefix(t.Source, "dir:")}
+	excluded := append([]string{"proc", "sys", "dev", "run", "tmp", "var/log", "var/cache", "var/lib/docker", "var/lib/containerd", "var/lib/kubelet", "var/lib/recense"}, t.Excludes...)
+	for _, path := range excluded {
+		path = strings.TrimPrefix(filepath.ToSlash(path), "/")
+		path = strings.NewReplacer("\\", "\\\\", "*", "\\*", "?", "\\?", "[", "\\[", "]", "\\]", "{", "\\{", "}", "\\}").Replace(path)
+		args = append(args, "--exclude", "./"+path, "--exclude", "./"+path+"/**")
 	}
 	scanCtx, cancel := context.WithTimeout(ctx, c.Timeout)
 	inventory, err := commandOutput(scanCtx, c.Syft, args, env, 128<<20)
@@ -112,9 +110,12 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	if packages.Artifacts == nil {
 		return fmt.Errorf("Syft report is missing artifacts")
 	}
-	if t.Kind == "container_image" && !imageMatches(packages, t.ID, t.Platform) {
-		return fmt.Errorf("scanned image ID does not match the running container; image reference may have changed")
+	if t.Validate != nil {
+		if err := t.Validate(); err != nil {
+			return err
+		}
 	}
+
 	for _, p := range packages.Artifacts {
 		fields := packageFields(p)
 		if err := emit("software.inventory", fields); err != nil {
@@ -128,6 +129,9 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	if err := os.WriteFile(sbomPath, inventory, 0600); err != nil {
 		return err
 	}
+	packageCount := len(packages.Artifacts)
+	inventory = nil
+	packages.Artifacts = nil
 	scanCtx, cancel = context.WithTimeout(ctx, c.Timeout)
 	findings, err := commandOutput(scanCtx, c.Grype, []string{"sbom:" + sbomPath, "-o", "json", "-c", config, "--quiet"}, env, 128<<20)
 	cancel()
@@ -155,7 +159,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		}
 		counts[strings.ToLower(m.Vulnerability.Severity)]++
 	}
-	fields := Event{"status": "success", "finding_count": len(report.Matches), "package_count": len(packages.Artifacts), "scanner_name": "grype", "scanner_version": report.Descriptor.Version, "duration_seconds": time.Since(started).Seconds()}
+	fields := Event{"status": "success", "finding_count": len(report.Matches), "package_count": packageCount, "scanner_name": "grype", "scanner_version": report.Descriptor.Version, "duration_seconds": time.Since(started).Seconds()}
 	// Preserve database provenance only. Never emit descriptor.configuration:
 	// it can contain registry credentials and local environment information.
 	var db struct {
@@ -174,40 +178,6 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		fields[severity+"_count"] = count
 	}
 	return emit("vulnerability.scan_completed", fields)
-}
-
-// Runtimes may identify images by config, platform manifest, or image index
-// digest. Docker's containerd image store uses index digests for multiarch images.
-func imageMatches(s sbom, expected, platform string) bool {
-	m := s.Source.Metadata
-	if expected == "" {
-		return false
-	}
-	if m.ImageID == expected || m.ManifestDigest == expected {
-		return true
-	}
-	// Index equality alone is insufficient: the running container's platform
-	// must also match. Without a platform, require config/manifest equality.
-	if platform == "" {
-		return false
-	}
-	parts := strings.Split(platform, "/")
-	if len(parts) < 2 || m.OS != parts[0] || m.Architecture != parts[1] {
-		return false
-	}
-	if len(parts) > 2 && m.Variant != parts[2] {
-		// OCI's baseline variants can be omitted from image config metadata.
-		if !(m.Variant == "" && ((parts[1] == "arm64" && parts[2] == "v8") || (parts[1] == "amd64" && parts[2] == "v1"))) {
-			return false
-		}
-	}
-	for _, ref := range m.RepoDigests {
-		_, digest, ok := strings.Cut(ref, "@")
-		if ok && digest == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func packageFields(p packageRecord) Event {
@@ -235,7 +205,7 @@ func commandOutput(ctx context.Context, name string, args, extraEnv []string, li
 	cmd.WaitDelay = 5 * time.Second
 	// Keep only transport/cache settings needed by scanners, not arbitrary agent
 	// environment variables or scanner options that could suppress findings.
-	allowed := map[string]bool{"PATH": true, "HOME": true, "TMPDIR": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true, "XDG_CACHE_HOME": true, "DOCKER_CONFIG": true}
+	allowed := map[string]bool{"PATH": true, "HOME": true, "TMPDIR": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true, "XDG_CACHE_HOME": true, "GOMEMLIMIT": true, "GOMAXPROCS": true}
 	for _, value := range os.Environ() {
 		key, _, _ := strings.Cut(value, "=")
 		if allowed[key] {

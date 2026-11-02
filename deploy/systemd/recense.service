@@ -17,9 +17,10 @@ TimeoutStopSec=15
 UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true
-CPUQuota=100%
+CPUQuota=25%
 MemoryMax=2G
 Nice=10
+IOSchedulingClass=idle
 
 [Install]
 WantedBy=multi-user.target
