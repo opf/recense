@@ -14,7 +14,7 @@ curl -fsSLO https://github.com/opf/recense/releases/latest/download/install.sh
 sudo sh install.sh
 ```
 
-The installer verifies the release archive checksum, installs binaries under `/opt/recense/bin`, and starts `recense.service`. Rerun with a release tag to upgrade or downgrade: `sudo sh install.sh v0.2.1`.
+The installer verifies the release archive checksum, installs binaries under `/opt/recense/bin`, and starts `recense.service`. Rerun with a release tag to upgrade or downgrade: `sudo sh install.sh v0.2.2`.
 
 ```sh
 sudo systemctl status recense
@@ -40,7 +40,7 @@ For EC2-backed EKS or other Linux Kubernetes nodes with containerd and CRI v1:
 
 ```sh
 helm upgrade --install recense \
-  https://github.com/opf/recense/releases/download/v0.2.1/recense-0.2.1.tgz \
+  https://github.com/opf/recense/releases/download/v0.2.2/recense-0.2.2.tgz \
   --namespace recense --create-namespace \
   --set clusterName=production-eks \
   --set environment=production
@@ -124,7 +124,7 @@ Go dependencies are pinned in `go.mod` / `go.sum`. Scanner versions are pinned i
 
 Before a release, run CI and verify both VM fixture collection and container runtime discovery. Unit tests use fake scanners and local Docker/CRI API servers; they do not inspect the developer's host or containers. CI also runs real Syft/Grype scans against a disposable Docker host and writable container filesystems, and the Helm DaemonSet in a disposable kind cluster.
 
-Apache-2.0. Bundled scanners and their licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+MIT. Bundled scanners and their licenses are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ### Weekly inventory and daily CVE results
 
