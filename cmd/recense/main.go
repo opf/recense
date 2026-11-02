@@ -27,6 +27,8 @@ func main() {
 	flag.StringVar(&c.Grype, "grype", "grype", "Grype executable")
 	flag.StringVar(&c.Output, "output", "", "append JSON Lines to this file instead of stdout")
 	flag.DurationVar(&c.Interval, "interval", 24*time.Hour, "time between completed collection cycles")
+	flag.DurationVar(&c.InventoryInterval, "inventory-interval", 7*24*time.Hour, "minimum time between full package snapshots per target")
+	flag.StringVar(&c.StateFile, "state-file", "/var/lib/recense/inventory-snapshots.json", "disposable inventory schedule file; loss triggers fresh snapshots")
 	flag.DurationVar(&c.Timeout, "scan-timeout", 45*time.Minute, "timeout per scanner invocation")
 	flag.DurationVar(&c.Jitter, "jitter", 15*time.Minute, "maximum random delay before startup and each cycle")
 	flag.BoolVar(&c.Once, "once", false, "collect once and exit; nonzero on collection failure")

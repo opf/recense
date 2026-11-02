@@ -91,7 +91,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	}
 	env := []string{"GOMEMLIMIT=512MiB", "GOMAXPROCS=1"}
 	args := []string{"scan", t.Source, "-o", "syft-json", "-c", config, "--quiet", "--parallelism", "1", "--override-default-catalogers", "image", "--base-path", strings.TrimPrefix(t.Source, "dir:")}
-	excluded := append([]string{"proc", "sys", "dev", "run", "tmp", "var/log", "var/cache", "var/lib/docker", "var/lib/containerd", "var/lib/kubelet", "var/lib/recense"}, t.Excludes...)
+	excluded := append([]string{"proc", "sys", "dev", "run", "tmp", "var/log", "var/cache", "var/lib/docker", "var/lib/containerd", "var/lib/kubelet", "var/lib/recense", "mnt/k8s-disks"}, t.Excludes...)
 	for _, path := range excluded {
 		path = strings.TrimPrefix(filepath.ToSlash(path), "/")
 		path = strings.NewReplacer("\\", "\\\\", "*", "\\*", "?", "\\?", "[", "\\[", "]", "\\]", "{", "\\{", "}", "\\}").Replace(path)
@@ -116,15 +116,27 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		}
 	}
 
-	for _, p := range packages.Artifacts {
-		fields := packageFields(p)
-		if err := emit("software.inventory", fields); err != nil {
+	snapshotSent := false
+	key := snapshotKey(c.HostID, t)
+	if c.snapshots == nil || c.snapshots.due(key, time.Now()) {
+		for _, p := range packages.Artifacts {
+			if err := emit("software.inventory", packageFields(p)); err != nil {
+				return err
+			}
+		}
+		if err := emit("software.inventory_completed", Event{"status": "success", "package_count": len(packages.Artifacts)}); err != nil {
 			return err
 		}
+		snapshotSent = true
+		if c.snapshots != nil {
+			if err := c.snapshots.record(key, time.Now()); err != nil {
+				if emitErr := emit("agent.error", Event{"stage": "inventory_schedule", "error": "inventory schedule could not be saved; a restart may repeat snapshots"}); emitErr != nil {
+					return emitErr
+				}
+			}
+		}
 	}
-	if err := emit("software.inventory_completed", Event{"status": "success", "package_count": len(packages.Artifacts)}); err != nil {
-		return err
-	}
+
 	sbomPath := filepath.Join(work, "sbom.json")
 	if err := os.WriteFile(sbomPath, inventory, 0600); err != nil {
 		return err
@@ -146,6 +158,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		return fmt.Errorf("Grype report is missing matches")
 	}
 	counts := map[string]int{"critical": 0, "high": 0, "medium": 0, "low": 0, "negligible": 0, "unknown": 0}
+	fixAvailableCount := 0
 	for _, m := range report.Matches {
 		fields := packageFields(m.Artifact)
 		fields["vulnerability_id"] = m.Vulnerability.ID
@@ -153,13 +166,18 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 		fields["vulnerability_severity"] = m.Vulnerability.Severity
 		fields["fix_state"] = m.Vulnerability.Fix.State
 		fields["fix_versions"] = m.Vulnerability.Fix.Versions
+		fields["fix_available"] = len(m.Vulnerability.Fix.Versions) > 0
+		if len(m.Vulnerability.Fix.Versions) > 0 {
+			fixAvailableCount++
+		}
 		fields["scanner_name"] = "grype"
 		if err := emit("vulnerability.finding", fields); err != nil {
 			return err
 		}
 		counts[strings.ToLower(m.Vulnerability.Severity)]++
 	}
-	fields := Event{"status": "success", "finding_count": len(report.Matches), "package_count": packageCount, "scanner_name": "grype", "scanner_version": report.Descriptor.Version, "duration_seconds": time.Since(started).Seconds()}
+	fields := Event{"status": "success", "finding_count": len(report.Matches), "package_count": packageCount, "inventory_snapshot_sent": snapshotSent, "scanner_name": "grype", "scanner_version": report.Descriptor.Version, "duration_seconds": time.Since(started).Seconds()}
+	fields["fix_available_count"] = fixAvailableCount
 	// Preserve database provenance only. Never emit descriptor.configuration:
 	// it can contain registry credentials and local environment information.
 	var db struct {
