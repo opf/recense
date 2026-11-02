@@ -21,6 +21,7 @@ jobs:
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: test -z "$(gofmt -l cmd internal)"
       - run: shellcheck -s sh install.sh scripts/*.sh
+      - run: python3 scripts/test-smoke-kubernetes.py
       - uses: azure/setup-helm@v4.3.0
       - run: helm lint charts/recense && helm template recense charts/recense > /tmp/daemonset.yaml
   container:
