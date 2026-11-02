@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -128,7 +129,7 @@ func TestEmptySuccessfulScan(t *testing.T) {
 	var b bytes.Buffer
 	e := &emitter{writer: &b}
 	c := Config{Syft: fakeScanner(t, "syft", `{"artifacts":[],"source":{"metadata":{"imageID":"sha256:abc"}}}`, 0), Grype: fakeScanner(t, "grype", `{"matches":[]}`, 0), Timeout: time.Second}
-	if err := scan(context.Background(), c, e, target{Kind: "container_image", ID: "sha256:abc"}); err != nil {
+	if err := scan(context.Background(), c, e, target{Kind: "container", ID: "sha256:abc"}); err != nil {
 		t.Fatal(err)
 	}
 	rows := events(t, &b)
@@ -148,14 +149,14 @@ func TestCommandOutputBoundAndTimeout(t *testing.T) {
 	}
 }
 func TestDockerDiscovery(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "d.sock")
+	socket := testSocket(t)
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/containers/c1/json" {
-			_, _ = w.Write([]byte(`{"ImageManifestDescriptor":{"Platform":{"os":"linux","architecture":"amd64"}}}`))
+			_, _ = w.Write([]byte(`{"State":{"Pid":123,"Running":true}}`))
 			return
 		}
 		if r.URL.Path != "/containers/json" || r.URL.Query().Get("all") != "false" {
@@ -169,7 +170,7 @@ func TestDockerDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ImageID != "sha256:abc" || rows[0].Name != "app" {
+	if len(rows) != 1 || rows[0].ImageID != "sha256:abc" || rows[0].Name != "app" || rows[0].PID != 123 {
 		t.Fatalf("bad discovery: %#v", rows)
 	}
 }
@@ -185,11 +186,14 @@ func (f *criFixture) ListContainers(_ context.Context, r *cri.ListContainersRequ
 	}
 	return &cri.ListContainersResponse{Containers: []*cri.Container{{Id: "c1", ImageRef: "sha256:config", Image: &cri.ImageSpec{Image: "app:latest"}, Metadata: &cri.ContainerMetadata{Name: "api"}, Labels: map[string]string{"io.kubernetes.pod.name": "api-123", "io.kubernetes.pod.namespace": "prod"}}}}, nil
 }
-func (f *criFixture) ImageStatus(_ context.Context, _ *cri.ImageStatusRequest) (*cri.ImageStatusResponse, error) {
-	return &cri.ImageStatusResponse{Image: &cri.Image{Id: "sha256:config", RepoTags: []string{"registry.example.com/app:latest"}, RepoDigests: []string{"import-date@sha256:manifest"}}}, nil
+func (f *criFixture) ContainerStatus(_ context.Context, r *cri.ContainerStatusRequest) (*cri.ContainerStatusResponse, error) {
+	if !r.Verbose || r.ContainerId != "c1" {
+		panic("wrong status request")
+	}
+	return &cri.ContainerStatusResponse{Status: &cri.ContainerStatus{State: cri.ContainerState_CONTAINER_RUNNING}, Info: map[string]string{"info": `{"pid":456,"secret":"never-log"}`}}, nil
 }
-func TestCRIDiscoveryResolvesDigest(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "c.sock")
+func TestCRIDiscoveryReadsPID(t *testing.T) {
+	socket := testSocket(t)
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +208,7 @@ func TestCRIDiscoveryResolvesDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ImageID != "sha256:config" || rows[0].ImageSource != "registry.example.com/app:latest" || rows[0].PodNamespace != "prod" {
+	if len(rows) != 1 || rows[0].ImageID != "sha256:config" || rows[0].PID != 456 || rows[0].PodNamespace != "prod" {
 		t.Fatalf("bad discovery: %#v", rows)
 	}
 }
@@ -255,48 +259,87 @@ func TestHostAbsoluteSymlinksDoNotReadAgentFilesystem(t *testing.T) {
 	}
 }
 
-func TestImageIdentityMismatchFailsBeforePublishingInventory(t *testing.T) {
-	var b bytes.Buffer
-	e := &emitter{writer: &b}
-	c := Config{Syft: fakeScanner(t, "syft", `{"artifacts":[{"name":"wrong-package"}],"source":{"metadata":{"imageID":"sha256:wrong"}}}`, 0), Timeout: time.Second}
-	if err := scan(context.Background(), c, e, target{Kind: "container_image", ID: "sha256:expected"}); err == nil {
-		t.Fatal("accepted a moved tag")
-	}
-	rows := events(t, &b)
-	if len(rows) != 1 || rows[0]["status"] != "failed" {
-		t.Fatalf("published incorrect inventory: %#v", rows)
-	}
-}
-
-func TestImageIdentitySupportsRuntimeDigestKinds(t *testing.T) {
-	var s sbom
-	if err := json.Unmarshal([]byte(`{"source":{"metadata":{"imageID":"sha256:config","manifestDigest":"sha256:manifest","repoDigests":["alpine@sha256:index"],"os":"linux","architecture":"arm64"}}}`), &s); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"sha256:config", "sha256:manifest", "sha256:index"} {
-		if !imageMatches(s, id, "linux/arm64") {
-			t.Fatalf("rejected runtime digest %s", id)
+func TestProcessChangeDiscardsInventory(t *testing.T) {
+	for _, failAt := range []int{1, 2} {
+		var b bytes.Buffer
+		calls := 0
+		validate := func() error {
+			calls++
+			if calls == failAt {
+				return errors.New("process changed")
+			}
+			return nil
 		}
-	}
-	for _, id := range []string{"", "sha256:other", "alpine:latest"} {
-		if imageMatches(s, id, "linux/arm64") {
-			t.Fatalf("accepted wrong identity %s", id)
+		c := Config{Syft: fakeScanner(t, "syft", inventoryFixture, 0), Timeout: time.Second}
+		err := scan(context.Background(), c, &emitter{writer: &b}, target{Kind: "container", ID: "c1", Validate: validate})
+		if err == nil {
+			t.Fatal("accepted changed process")
+		}
+		rows := events(t, &b)
+		if len(rows) != 1 || rows[0]["status"] != "failed" {
+			t.Fatalf("published stale inventory: %#v", rows)
 		}
 	}
 }
 
-func TestImageIndexRequiresRunningPlatform(t *testing.T) {
-	var s sbom
-	if err := json.Unmarshal([]byte(`{"source":{"metadata":{"imageID":"sha256:armconfig","repoDigests":["alpine@sha256:index"],"os":"linux","architecture":"arm64"}}}`), &s); err != nil {
+func TestRuntimeRejectsPIDReusedBeforeScan(t *testing.T) {
+	socket := testSocket(t)
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if imageMatches(s, "sha256:index", "linux/amd64") {
-		t.Fatal("accepted arm64 scan for emulated amd64 container")
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The original ID is stopped even though its old PID may now belong to another container.
+		_, _ = w.Write([]byte(`{"State":{"Pid":123,"Running":false}}`))
+	})}
+	go server.Serve(listener)
+	defer server.Close()
+	if validateContainerProcess(context.Background(), "docker", socket, "old-container", 123) == nil {
+		t.Fatal("accepted stopped container with recycled PID")
 	}
-	if imageMatches(s, "sha256:index", "") {
-		t.Fatal("accepted ambiguous image index")
+}
+
+func TestDockerDiscoverySkipsExitedContainers(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusOK} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			socket := testSocket(t)
+			listener, err := net.Listen("unix", socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/containers/json":
+					_, _ = w.Write([]byte(`[{"Id":"gone","ImageID":"sha256:a"},{"Id":"live","ImageID":"sha256:b"}]`))
+				case "/containers/gone/json":
+					w.WriteHeader(code)
+					_, _ = w.Write([]byte(`{"State":{"Running":false}}`))
+				case "/containers/live/json":
+					_, _ = w.Write([]byte(`{"State":{"Running":true,"Pid":456}}`))
+				default:
+					t.Errorf("unexpected path %s", r.URL.Path)
+				}
+			})}
+			go server.Serve(listener)
+			defer server.Close()
+			rows, err := dockerContainers(context.Background(), socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || rows[0].ID != "live" {
+				t.Fatalf("lost running container: %#v", rows)
+			}
+		})
 	}
-	if !imageMatches(s, "sha256:index", "linux/arm64/v8") {
-		t.Fatal("rejected running arm64 variant")
+}
+
+// Unix socket paths have a short platform-specific length limit.
+func testSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "rc-")
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "s")
 }

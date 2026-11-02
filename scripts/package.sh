@@ -8,7 +8,7 @@ cd "$root"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$stage/recense" ./cmd/recense
-scripts/fetch-scanner.sh syft 1.55.0 linux "$arch" "$stage"
+scripts/fetch-scanner.sh syft 1.56.0 linux "$arch" "$stage"
 scripts/fetch-scanner.sh grype 0.121.0 linux "$arch" "$stage"
 cp deploy/systemd/recense.service deploy/systemd/recense.logrotate "$stage/"
 cp README.md LICENSE THIRD_PARTY.md "$stage/"

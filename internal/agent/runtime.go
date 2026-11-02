@@ -3,21 +3,28 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	cri "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
-type container struct{ ID, Name, ImageID, ImageName, ImageSource, Platform, PodName, PodNamespace, PodContainer string }
+var errContainerStopped = errors.New("container is no longer running")
+
+type container struct {
+	ID, Name, ImageID, ImageName, PodName, PodNamespace, PodContainer string
+	PID                                                               int
+}
 
 func discover(ctx context.Context, c Config) ([]container, string, string, error) {
 	if c.Runtime == "none" {
@@ -93,35 +100,15 @@ func dockerContainers(ctx context.Context, socket string) ([]container, error) {
 		if r.ImageID == "" {
 			return nil, fmt.Errorf("Docker container %s has no immutable image ID", r.ID)
 		}
-		// Docker's image store may identify the image by a multi-platform index.
-		// Inspect the container, not the host, to select the variant actually running.
-		inspectReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/containers/"+r.ID+"/json", nil)
-		inspectResponse, err := client.Do(inspectReq)
+		pid, err := dockerPID(ctx, client, r.ID)
+		if errors.Is(err, errContainerStopped) {
+			continue
+		}
 		if err != nil {
-			return nil, fmt.Errorf("Docker container inspection: %w", err)
+			return nil, err
 		}
-		var inspect struct {
-			ImageManifestDescriptor *struct {
-				Platform *struct{ OS, Architecture, Variant string }
-			}
-		}
-		decodeErr := json.NewDecoder(io.LimitReader(inspectResponse.Body, 4<<20)).Decode(&inspect)
-		inspectResponse.Body.Close()
-		if inspectResponse.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("Docker inspection returned HTTP %d", inspectResponse.StatusCode)
-		}
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		platform := ""
-		if inspect.ImageManifestDescriptor != nil && inspect.ImageManifestDescriptor.Platform != nil {
-			p := inspect.ImageManifestDescriptor.Platform
-			platform = p.OS + "/" + p.Architecture
-			if p.Variant != "" {
-				platform += "/" + p.Variant
-			}
-		}
-		result = append(result, container{ID: r.ID, Name: name, ImageID: r.ImageID, ImageSource: r.ImageID, ImageName: r.Image, Platform: platform})
+
+		result = append(result, container{ID: r.ID, Name: name, ImageID: r.ImageID, ImageName: r.Image, PID: pid})
 	}
 	return result, nil
 }
@@ -145,25 +132,97 @@ func criContainers(ctx context.Context, socket string) ([]container, error) {
 		if r.Metadata != nil {
 			name = r.Metadata.Name
 		}
-		// Use a local image name; CRI may return synthetic import-* repository
-		// digests that are not registry references. Verify the config ID after scanning.
-		status, err := cri.NewImageServiceClient(conn).ImageStatus(ctx, &cri.ImageStatusRequest{Image: &cri.ImageSpec{Image: r.ImageRef}})
+		pid, err := criPID(ctx, cri.NewRuntimeServiceClient(conn), r.Id)
+		if errors.Is(err, errContainerStopped) {
+			continue
+		}
 		if err != nil {
-			return nil, fmt.Errorf("CRI image status: %w", err)
+			return nil, err
 		}
-		if status.Image == nil || status.Image.Id == "" {
-			return nil, fmt.Errorf("CRI image %s has no immutable image ID", r.ImageRef)
-		}
-		source := ""
-		if len(status.Image.RepoTags) > 0 {
-			source = status.Image.RepoTags[0]
-		} else if len(status.Image.RepoDigests) > 0 {
-			source = status.Image.RepoDigests[0]
-		}
-		if source == "" {
-			return nil, fmt.Errorf("CRI image %s has no local image reference", r.ImageRef)
-		}
-		result = append(result, container{ID: r.Id, Name: name, ImageID: status.Image.Id, ImageSource: source, ImageName: r.GetImage().GetImage(), Platform: "linux/" + runtime.GOARCH, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
+
+		result = append(result, container{ID: r.Id, Name: name, ImageID: r.ImageRef, ImageName: r.GetImage().GetImage(), PID: pid, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
 	}
 	return result, nil
+}
+
+func dockerPID(ctx context.Context, client *http.Client, id string) (int, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/containers/"+id+"/json", nil)
+	response, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("Docker container inspection: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		return 0, errContainerStopped
+	}
+	if response.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("Docker inspection returned HTTP %d", response.StatusCode)
+	}
+	var status struct {
+		State struct {
+			Pid     int
+			Running bool
+		}
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&status); err != nil {
+		return 0, err
+	}
+	if !status.State.Running || status.State.Pid <= 1 {
+		return 0, errContainerStopped
+	}
+	return status.State.Pid, nil
+}
+
+func criPID(ctx context.Context, client cri.RuntimeServiceClient, id string) (int, error) {
+	response, err := client.ContainerStatus(ctx, &cri.ContainerStatusRequest{ContainerId: id, Verbose: true})
+	if status.Code(err) == codes.NotFound {
+		return 0, errContainerStopped
+	}
+	if err != nil {
+		return 0, fmt.Errorf("CRI container status: %w", err)
+	}
+	if response.Status == nil || response.Status.State != cri.ContainerState_CONTAINER_RUNNING {
+		return 0, errContainerStopped
+	}
+	// Runtime info may contain environment secrets; decode only the PID.
+	var info struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal([]byte(response.Info["info"]), &info); err != nil {
+		return 0, fmt.Errorf("invalid CRI process metadata")
+	}
+	if info.PID <= 1 {
+		return 0, fmt.Errorf("runtime did not provide a running container PID")
+	}
+	return info.PID, nil
+}
+
+// Runtime identity must still match at scan time, even if the discovered PID
+// was reused while earlier containers were being scanned.
+func validateContainerProcess(ctx context.Context, runtime, socket, id string, expectedPID int) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var pid int
+	var err error
+	if runtime == "docker" {
+		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		}}
+		defer transport.CloseIdleConnections()
+		pid, err = dockerPID(ctx, &http.Client{Transport: transport}, id)
+	} else {
+		conn, connectErr := grpc.NewClient("unix://"+socket, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if connectErr != nil {
+			return connectErr
+		}
+		defer conn.Close()
+		pid, err = criPID(ctx, cri.NewRuntimeServiceClient(conn), id)
+	}
+	if err != nil {
+		return err
+	}
+	if pid != expectedPID {
+		return fmt.Errorf("container process changed since discovery")
+	}
+	return nil
 }

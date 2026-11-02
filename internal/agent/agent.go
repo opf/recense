@@ -6,21 +6,22 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
 	"time"
 )
 
 type Config struct {
-	Root, Runtime, Socket, Namespace, HostID, HostName, Environment, Cluster string
-	Syft, Grype, Output, Version                                             string
-	Interval, Timeout                                                        time.Duration
-	Once                                                                     bool
+	Root, Runtime, Socket, HostID, HostName, Environment, Cluster string
+	Syft, Grype, Output, Version                                  string
+	Interval, Timeout, Jitter                                     time.Duration
+	Once                                                          bool
 }
 
 func Run(ctx context.Context, c Config) error {
-	if c.Interval <= 0 || c.Timeout <= 0 {
-		return errors.New("interval and scan-timeout must be positive")
+	if c.Interval <= 0 || c.Timeout <= 0 || c.Jitter < 0 {
+		return errors.New("interval and scan-timeout must be positive; jitter must be nonnegative")
 	}
 	switch c.Runtime {
 	case "auto", "none", "docker", "containerd":
@@ -64,6 +65,29 @@ func Run(ctx context.Context, c Config) error {
 	if err := e.emit("agent.heartbeat", nil); err != nil {
 		return err
 	}
+	delay := func(duration time.Duration) error {
+		timer := time.NewTimer(duration)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-heartbeatErr:
+			return err
+		case <-timer.C:
+			return nil
+		}
+	}
+	jitter := func() time.Duration {
+		if c.Jitter == 0 {
+			return 0
+		}
+		return time.Duration(mathrand.Int64N(int64(c.Jitter)))
+	}
+	if !c.Once {
+		if err := delay(jitter()); err != nil {
+			return err
+		}
+	}
 	for {
 		err := cycle(heartbeatCtx, c, e)
 		if c.Once {
@@ -82,15 +106,8 @@ func Run(ctx context.Context, c Config) error {
 				return emitErr
 			}
 		}
-		timer := time.NewTimer(c.Interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil
-		case err := <-heartbeatErr:
-			timer.Stop()
+		if err := delay(c.Interval + jitter()); err != nil {
 			return err
-		case <-timer.C:
 		}
 	}
 }
@@ -130,7 +147,7 @@ func cycle(ctx context.Context, c Config, e *emitter) error {
 	} else {
 		for _, container := range containers {
 			event := Event{"collection_id": id, "container_id": container.ID, "container_name": container.Name,
-				"image_id": container.ImageID, "image_platform": container.Platform, "image_name": container.ImageName, "container_runtime": runtimeName,
+				"image_id": container.ImageID, "image_name": container.ImageName, "container_runtime": runtimeName,
 				"k8s_namespace_name": container.PodNamespace, "k8s_pod_name": container.PodName, "k8s_container_name": container.PodContainer}
 			if err := e.emit("container.inventory", event); err != nil {
 				return err
@@ -139,18 +156,24 @@ func cycle(ctx context.Context, c Config, e *emitter) error {
 		if err := e.emit("container.discovery_completed", Event{"collection_id": id, "status": "success", "container_runtime": runtimeName, "container_count": len(containers)}); err != nil {
 			return err
 		}
-		c.Socket = socket
-		seen := map[string]bool{}
 		for _, container := range containers {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			key := container.ImageID + "|" + container.Platform
-			if seen[key] {
-				continue
+			t := target{Kind: "container", ID: container.ID}
+			root, exclusions, validate, rootErr := containerFilesystem(c.Root, container.PID)
+			if rootErr != nil {
+				t.Validate = func() error { return rootErr }
+			} else {
+				t.Source = "dir:" + root
+				t.Excludes = exclusions
+				t.Validate = func() error {
+					if err := validateContainerProcess(ctx, runtimeName, socket, container.ID, container.PID); err != nil {
+						return err
+					}
+					return validate()
+				}
 			}
-			seen[key] = true
-			t := target{Kind: "container_image", ID: container.ImageID, Source: runtimeName + ":" + container.ImageSource, Platform: container.Platform}
 			if err := scan(ctx, c, e, t); err != nil {
 				failures = append(failures, err)
 			}

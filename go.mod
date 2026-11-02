@@ -3,6 +3,7 @@ module github.com/opf/recense
 go 1.27.3
 
 require (
+	github.com/moby/sys/mountinfo v0.7.3
 	google.golang.org/grpc v1.85.0
 	k8s.io/cri-api v0.37.2
 )
