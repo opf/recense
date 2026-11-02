@@ -14,7 +14,7 @@ curl -fsSLO https://github.com/opf/recense/releases/latest/download/install.sh
 sudo sh install.sh
 ```
 
-The installer verifies the release archive checksum, installs binaries under `/opt/recense/bin`, and starts `recense.service`. Rerun with a release tag to upgrade or downgrade: `sudo sh install.sh v0.2.0`.
+The installer verifies the release archive checksum, installs binaries under `/opt/recense/bin`, and starts `recense.service`. Rerun with a release tag to upgrade or downgrade: `sudo sh install.sh v0.2.1`.
 
 ```sh
 sudo systemctl status recense
@@ -40,7 +40,7 @@ For EC2-backed EKS or other Linux Kubernetes nodes with containerd and CRI v1:
 
 ```sh
 helm upgrade --install recense \
-  https://github.com/opf/recense/releases/download/v0.2.0/recense-0.2.0.tgz \
+  https://github.com/opf/recense/releases/download/v0.2.1/recense-0.2.1.tgz \
   --namespace recense --create-namespace \
   --set clusterName=production-eks \
   --set environment=production
@@ -99,7 +99,7 @@ Do not count every finding in a time window as a current vulnerability: repeated
 ## Coverage and limits
 
 - Host scans read the host filesystem. Container scans read each running container's filesystem, including its writable layer. No image download or export is required. Containers sharing an image still need separate scans because their writable layers can differ.
-- Scans exclude `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/log`, `/var/cache`, `/var/lib/docker`, `/var/lib/containerd`, `/var/lib/kubelet`, and `/var/lib/recense`. Container scans also exclude mounted volumes. Software under excluded paths is not covered.
+- Scans exclude `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/log`, `/var/cache`, `/var/lib/docker`, `/var/lib/containerd`, `/var/lib/kubelet`, `/var/lib/recense`, and `/mnt/k8s-disks` (EKS local storage backing directories). Container scans also exclude mounted volumes. Software under excluded paths is not covered.
 - Container roots must be visible in the host mount namespace. Recense verifies the root inode and process start time before and after inventory collection. Missing or changed roots fail the scan; they never fall back to another filesystem. A live filesystem is not an atomic snapshot.
 - Container scan identity is the container ID. Image IDs are descriptive metadata. Inventoried binaries are installed versions, not proof that a process is running them.
 - Ubuntu update checks use `python3-apt` and existing APT metadata. Recense does not refresh APT; keep the host's normal refresh timers enabled. Metadata refresh time is included when the Ubuntu success stamp exists. Missing `python3-apt` is reported as a failed check.

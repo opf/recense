@@ -91,7 +91,7 @@ func scan(ctx context.Context, c Config, e *emitter, t target) (resultErr error)
 	}
 	env := []string{"GOMEMLIMIT=512MiB", "GOMAXPROCS=1"}
 	args := []string{"scan", t.Source, "-o", "syft-json", "-c", config, "--quiet", "--parallelism", "1", "--override-default-catalogers", "image", "--base-path", strings.TrimPrefix(t.Source, "dir:")}
-	excluded := append([]string{"proc", "sys", "dev", "run", "tmp", "var/log", "var/cache", "var/lib/docker", "var/lib/containerd", "var/lib/kubelet", "var/lib/recense"}, t.Excludes...)
+	excluded := append([]string{"proc", "sys", "dev", "run", "tmp", "var/log", "var/cache", "var/lib/docker", "var/lib/containerd", "var/lib/kubelet", "var/lib/recense", "mnt/k8s-disks"}, t.Excludes...)
 	for _, path := range excluded {
 		path = strings.TrimPrefix(filepath.ToSlash(path), "/")
 		path = strings.NewReplacer("\\", "\\\\", "*", "\\*", "?", "\\?", "[", "\\[", "]", "\\]", "{", "\\{", "}", "\\}").Replace(path)

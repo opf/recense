@@ -38,6 +38,8 @@ jobs:
       - run: docker run --rm recense:test --version
       - run: docker run --rm --entrypoint syft recense:test version
       - run: docker run --rm --entrypoint grype recense:test version
+      - name: Exclude EKS backing storage
+        run: scripts/smoke-storage.sh
       - name: End-to-end host and Docker collection
         run: scripts/smoke-docker.sh
       - uses: azure/setup-helm@v4.3.0
