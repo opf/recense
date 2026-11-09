@@ -22,8 +22,8 @@ import (
 var errContainerStopped = errors.New("container is no longer running")
 
 type container struct {
-	ID, Name, ImageID, ImageName, PodName, PodNamespace, PodContainer string
-	PID                                                               int
+	ID, Name, ImageID, ImageName, ImageReference, PodName, PodNamespace, PodContainer string
+	PID                                                                               int
 }
 
 func discover(ctx context.Context, c Config) ([]container, string, string, error) {
@@ -132,7 +132,7 @@ func criContainers(ctx context.Context, socket string) ([]container, error) {
 		if r.Metadata != nil {
 			name = r.Metadata.Name
 		}
-		pid, err := criPID(ctx, cri.NewRuntimeServiceClient(conn), r.Id)
+		pid, imageStatus, err := criStatus(ctx, cri.NewRuntimeServiceClient(conn), r.Id)
 		if errors.Is(err, errContainerStopped) {
 			continue
 		}
@@ -140,7 +140,7 @@ func criContainers(ctx context.Context, socket string) ([]container, error) {
 			return nil, err
 		}
 
-		result = append(result, container{ID: r.Id, Name: name, ImageID: r.ImageRef, ImageName: r.GetImage().GetImage(), PID: pid, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
+		result = append(result, container{ID: r.Id, Name: name, ImageID: r.ImageRef, ImageName: imageStatus.GetImage().GetImage(), ImageReference: registryReference(imageStatus.ImageRef), PID: pid, PodName: r.Labels["io.kubernetes.pod.name"], PodNamespace: r.Labels["io.kubernetes.pod.namespace"], PodContainer: name})
 	}
 	return result, nil
 }
@@ -173,28 +173,42 @@ func dockerPID(ctx context.Context, client *http.Client, id string) (int, error)
 	return status.State.Pid, nil
 }
 
-func criPID(ctx context.Context, client cri.RuntimeServiceClient, id string) (int, error) {
+func criStatus(ctx context.Context, client cri.RuntimeServiceClient, id string) (int, *cri.ContainerStatus, error) {
 	response, err := client.ContainerStatus(ctx, &cri.ContainerStatusRequest{ContainerId: id, Verbose: true})
 	if status.Code(err) == codes.NotFound {
-		return 0, errContainerStopped
+		return 0, nil, errContainerStopped
 	}
 	if err != nil {
-		return 0, fmt.Errorf("CRI container status: %w", err)
+		return 0, nil, fmt.Errorf("CRI container status: %w", err)
 	}
 	if response.Status == nil || response.Status.State != cri.ContainerState_CONTAINER_RUNNING {
-		return 0, errContainerStopped
+		return 0, nil, errContainerStopped
 	}
 	// Runtime info may contain environment secrets; decode only the PID.
 	var info struct {
 		PID int `json:"pid"`
 	}
 	if err := json.Unmarshal([]byte(response.Info["info"]), &info); err != nil {
-		return 0, fmt.Errorf("invalid CRI process metadata")
+		return 0, nil, fmt.Errorf("invalid CRI process metadata")
 	}
 	if info.PID <= 1 {
-		return 0, fmt.Errorf("runtime did not provide a running container PID")
+		return 0, nil, fmt.Errorf("runtime did not provide a running container PID")
 	}
-	return info.PID, nil
+	return info.PID, response.Status, nil
+}
+
+// Only repository-qualified references identify an image in a registry.
+// Some runtimes return a bare configuration ID in ImageRef instead.
+func registryReference(ref string) string {
+	if strings.Contains(ref, "@") {
+		return ref
+	}
+	return ""
+}
+
+func criPID(ctx context.Context, client cri.RuntimeServiceClient, id string) (int, error) {
+	pid, _, err := criStatus(ctx, client, id)
+	return pid, err
 }
 
 // Runtime identity must still match at scan time, even if the discovered PID
