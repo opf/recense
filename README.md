@@ -14,7 +14,7 @@ curl -fsSLO https://github.com/opf/recense/releases/latest/download/install.sh
 sudo sh install.sh
 ```
 
-The installer verifies the release archive checksum, installs binaries under `/opt/recense/bin`, and starts `recense.service`. Rerun with a release tag to upgrade or downgrade: `sudo sh install.sh v0.2.2`.
+The installer verifies the release archive checksum, installs binaries under `/opt/recense/bin`, and starts `recense.service`. Rerun with a release tag to upgrade or downgrade: `sudo sh install.sh v0.2.3`.
 
 ```sh
 sudo systemctl status recense
@@ -40,7 +40,7 @@ For EC2-backed EKS or other Linux Kubernetes nodes with containerd and CRI v1:
 
 ```sh
 helm upgrade --install recense \
-  https://github.com/opf/recense/releases/download/v0.2.2/recense-0.2.2.tgz \
+  https://github.com/opf/recense/releases/download/v0.2.3/recense-0.2.3.tgz \
   --namespace recense --create-namespace \
   --set clusterName=production-eks \
   --set environment=production
@@ -145,3 +145,15 @@ Filter logs by `service.name = recense`, then by event type:
 Keep all detected packages in scope. Use dashboard filters to prioritize High/Critical findings and available fixes. Counts represent package/advisory matches, not unique CVEs. Choose the latest successful scan per target before aggregating; summing several days repeats findings. Show failed scans and scan age separately.
 
 Schema 3 uses standard OpenTelemetry names for service, host, cluster, and deployment identity. All custom fields use `recense.`. Scanned-container metadata uses `recense.target.*`; collector resource attributes identify the Recense pod. Old field aliases are not emitted.
+
+### Container image identity
+
+For CRI/containerd, `recense.target.image.name` comes from container status.
+`recense.target.image.reference` holds the repository-qualified registry digest
+(for example, `registry/app@sha256:…`). `recense.target.image.id` remains the
+runtime image ID; it may identify the image configuration rather than the
+manifest shown in ECR. Registry references are empty when unavailable. Docker
+discovery currently reports its image name and runtime ID only.
+
+These fields describe the image used to create the container. Scans inspect its
+running filesystem, which can differ from the original image.

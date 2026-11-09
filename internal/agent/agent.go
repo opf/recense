@@ -212,6 +212,7 @@ func containerFields(c container, runtimeName string) Event {
 		"recense.target.container.runtime":  runtimeName,
 		"recense.target.image.id":           c.ImageID,
 		"recense.target.image.name":         c.ImageName,
+		"recense.target.image.reference":    c.ImageReference,
 		"recense.target.k8s.namespace.name": c.PodNamespace,
 		"recense.target.k8s.pod.name":       c.PodName,
 		"recense.target.k8s.container.name": c.PodContainer,

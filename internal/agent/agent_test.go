@@ -184,13 +184,13 @@ func (f *criFixture) ListContainers(_ context.Context, r *cri.ListContainersRequ
 	if r.Filter.State.State != cri.ContainerState_CONTAINER_RUNNING {
 		panic("wrong filter")
 	}
-	return &cri.ListContainersResponse{Containers: []*cri.Container{{Id: "c1", ImageRef: "sha256:config", Image: &cri.ImageSpec{Image: "app:latest"}, Metadata: &cri.ContainerMetadata{Name: "api"}, Labels: map[string]string{"io.kubernetes.pod.name": "api-123", "io.kubernetes.pod.namespace": "prod"}}}}, nil
+	return &cri.ListContainersResponse{Containers: []*cri.Container{{Id: "c1", ImageRef: "sha256:config", Image: &cri.ImageSpec{Image: "sha256:config"}, Metadata: &cri.ContainerMetadata{Name: "api"}, Labels: map[string]string{"io.kubernetes.pod.name": "api-123", "io.kubernetes.pod.namespace": "prod"}}}}, nil
 }
 func (f *criFixture) ContainerStatus(_ context.Context, r *cri.ContainerStatusRequest) (*cri.ContainerStatusResponse, error) {
 	if !r.Verbose || r.ContainerId != "c1" {
 		panic("wrong status request")
 	}
-	return &cri.ContainerStatusResponse{Status: &cri.ContainerStatus{State: cri.ContainerState_CONTAINER_RUNNING}, Info: map[string]string{"info": `{"pid":456,"secret":"never-log"}`}}, nil
+	return &cri.ContainerStatusResponse{Status: &cri.ContainerStatus{State: cri.ContainerState_CONTAINER_RUNNING, Image: &cri.ImageSpec{Image: "registry.example/app:release"}, ImageRef: "registry.example/app@sha256:manifest"}, Info: map[string]string{"info": `{"pid":456,"secret":"never-log"}`}}, nil
 }
 func TestCRIDiscoveryReadsPID(t *testing.T) {
 	socket := testSocket(t)
@@ -208,7 +208,7 @@ func TestCRIDiscoveryReadsPID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ImageID != "sha256:config" || rows[0].PID != 456 || rows[0].PodNamespace != "prod" {
+	if len(rows) != 1 || rows[0].ImageID != "sha256:config" || rows[0].PID != 456 || rows[0].PodNamespace != "prod" || rows[0].ImageName != "registry.example/app:release" || rows[0].ImageReference != "registry.example/app@sha256:manifest" {
 		t.Fatalf("bad discovery: %#v", rows)
 	}
 }
@@ -342,4 +342,14 @@ func testSocket(t *testing.T) string {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	return filepath.Join(dir, "s")
+}
+
+func TestRegistryReferenceDoesNotMislabelConfigID(t *testing.T) {
+	if registryReference("sha256:config") != "" {
+		t.Fatal("configuration ID is not a registry reference")
+	}
+	fields := containerFields(container{ImageID: "sha256:config", ImageName: "registry/app:tag", ImageReference: "registry/app@sha256:manifest"}, "containerd")
+	if fields["recense.target.image.reference"] != "registry/app@sha256:manifest" || fields["recense.target.image.id"] != "sha256:config" {
+		t.Fatalf("bad image fields: %#v", fields)
+	}
 }
